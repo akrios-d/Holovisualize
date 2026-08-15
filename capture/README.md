@@ -162,6 +162,23 @@ Offset      Size  Type    Description
 23 + i*16   1     u8      (padding)
 ```
 
+## Possible improvements
+
+### Drop opencv4 from the build (faster CI)
+
+`opencv4[contrib]` is only used by `BackgroundSubtractorFilter` (MOG2) and the
+ArUco calibration path. It is by far the heaviest dependency (~40 min to compile
+from source in CI). Two independent improvements:
+
+- **Background subtraction without OpenCV** — replace MOG2 with a simple
+  rolling-average depth-map model (maintain a per-pixel mean + threshold). No
+  accuracy loss for the Kinect use-case; saves the entire OpenCV compile.
+- **ArUco without `contrib`** — OpenCV 4.8+ ships ArUco in the main `calib3d`
+  module. Switch to `opencv4` (no `[contrib]` feature) and update the
+  `#include` paths; calibration continues to work.
+
+Either change cuts the `capture` CI job from ~60 min to ~10 min.
+
 ## Adding a new sensor
 
 1. Create a class in `include/sensors/` and `src/sensors/` that implements `ISensor`.
