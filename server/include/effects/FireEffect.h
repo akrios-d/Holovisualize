@@ -1,6 +1,10 @@
 #pragma once
+#ifndef NOMINMAX
+#  define NOMINMAX
+#endif
 #include "IEffect.h"
 #include "effects/EffectUtils.h"
+#include <algorithm>
 #include <vector>
 
 // Triggered by: PalmUp

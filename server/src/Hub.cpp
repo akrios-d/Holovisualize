@@ -1,3 +1,6 @@
+#ifndef NOMINMAX
+#  define NOMINMAX
+#endif
 #include "Hub.h"
 #include <algorithm>
 #include <cctype>

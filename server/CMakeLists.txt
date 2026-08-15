@@ -4,6 +4,11 @@ project(holovisualize-server C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Prevent windows.h from defining min/max macros that break std::min/max
+if(WIN32)
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 # ── Dependencies ──────────────────────────────────────────────────────────────
 # ixwebsocket depends on OpenSSL and zlib — find them first so their
 # imported targets exist when ixwebsocket-config.cmake references them.
