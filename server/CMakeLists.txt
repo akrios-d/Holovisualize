@@ -5,7 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
-# vcpkg install ixwebsocket
+# ixwebsocket depends on OpenSSL and zlib — find them first so their
+# imported targets exist when ixwebsocket-config.cmake references them.
+find_package(OpenSSL REQUIRED)
+find_package(ZLIB    REQUIRED)
 find_package(ixwebsocket REQUIRED)
 
 # ikcp — vendored in third_party/kcp (avoids FetchContent + kcp's CMake 4.0 req)
