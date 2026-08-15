@@ -1,6 +1,17 @@
 #include "Hub.h"
 #include "Frame.h"
 #include "ISession.h"
+#include "SessionModelView.h"
+
+// Effects
+#include "effects/FireEffect.h"
+#include "effects/LightningEffect.h"
+#include "effects/ShockwaveEffect.h"
+#include "effects/VortexEffect.h"
+#include "effects/ExplosionEffect.h"
+#include "effects/IceSpikesEffect.h"
+#include "effects/BlackHoleEffect.h"
+#include "effects/SpawnedObjectEffect.h"
 
 #include <ixwebsocket/IXWebSocketServer.h>
 #include <ixwebsocket/IXHttpServer.h>
@@ -297,6 +308,75 @@ int main(int argc, char* argv[]) {
     // Hub owns the UDP/KCP consumer socket (port 8081) and session registry.
     Hub hub(voxelRes);
     hub.setWsPort(wsPort);
+
+    // ── Register gesture effects (Socket Pattern) ─────────────────────────────
+    // Each factory is called when a new GestureEvent of that type fires.
+    // Add or remove mappings here — no other file needs to change.
+    hub.onSessionCreated([](SessionModelView& mv) {
+        // Single-hand
+        mv.registerEffect(GestureType::PalmUp,
+            [] { return std::make_unique<FireEffect>(); });
+        mv.registerEffect(GestureType::PalmDown,
+            [] { return std::make_unique<ShockwaveEffect>(); });
+        mv.registerEffect(GestureType::Fist,
+            [] { return std::make_unique<IceSpikesEffect>(); });
+        mv.registerEffect(GestureType::OpenHand,
+            [] { return std::make_unique<ExplosionEffect>(); });
+        mv.registerEffect(GestureType::Circle,
+            [] { return std::make_unique<VortexEffect>(); });
+        mv.registerEffect(GestureType::PointFinger, [] {
+            SpawnConfig cfg;
+            cfg.shape = SpawnShape::Sphere;
+            cfg.color = {100, 200, 255};
+            return std::make_unique<SpawnedObjectEffect>(cfg);
+        });
+        mv.registerEffect(GestureType::ThumbsUp, [] {
+            SpawnConfig cfg;
+            cfg.shape = SpawnShape::Star;
+            cfg.color = {255, 220, 0};
+            return std::make_unique<SpawnedObjectEffect>(cfg);
+        });
+        mv.registerEffect(GestureType::Peace, [] {
+            SpawnConfig cfg;
+            cfg.shape = SpawnShape::Crystal;
+            cfg.color = {180, 100, 255};
+            return std::make_unique<SpawnedObjectEffect>(cfg);
+        });
+        // Motion
+        mv.registerEffect(GestureType::Push,
+            [] { return std::make_unique<ShockwaveEffect>(); });
+        mv.registerEffect(GestureType::SwipeLeft,
+            [] { return std::make_unique<ExplosionEffect>(); });
+        mv.registerEffect(GestureType::SwipeRight,
+            [] { return std::make_unique<ExplosionEffect>(); });
+        mv.registerEffect(GestureType::Cross,
+            [] { return std::make_unique<LightningEffect>(); });
+        // Two-hand
+        mv.registerEffect(GestureType::Clap,
+            [] { return std::make_unique<LightningEffect>(); });
+        mv.registerEffect(GestureType::TwoHandsClap,
+            [] { return std::make_unique<ShockwaveEffect>(); });
+        mv.registerEffect(GestureType::TwoHandsStretch,
+            [] { return std::make_unique<BlackHoleEffect>(); });
+        mv.registerEffect(GestureType::TwoHandsPinch, [] {
+            SpawnConfig cfg;
+            cfg.shape = SpawnShape::Torus;
+            cfg.color = {0, 255, 180};
+            cfg.gravity = 0.f; // float
+            return std::make_unique<SpawnedObjectEffect>(cfg);
+        });
+        // Body
+        mv.registerEffect(GestureType::ArmsRaised,
+            [] { return std::make_unique<FireEffect>(); });
+        mv.registerEffect(GestureType::Jump,
+            [] { return std::make_unique<ShockwaveEffect>(); });
+        mv.registerEffect(GestureType::Bow, [] {
+            SpawnConfig cfg;
+            cfg.shape = SpawnShape::Cube;
+            cfg.color = {255, 100, 100};
+            return std::make_unique<SpawnedObjectEffect>(cfg);
+        });
+    });
 
     // ── WebSocket server — producers only ─────────────────────────────────────
     // Consumers connect via KCP/UDP (port 8081), not WebSocket.

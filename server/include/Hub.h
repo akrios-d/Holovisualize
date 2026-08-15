@@ -26,6 +26,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -72,6 +73,16 @@ public:
     // UDP socket fd — exposed so SessionViewController::KcpConsumer can use it.
     int udpFd() const { return udpFd_; }
 
+    // Called once on every newly created session (Socket Pattern hook).
+    // Use this to register gesture detectors and effect factories.
+    // Example:
+    //   hub.onSessionCreated([](SessionModelView& mv) {
+    //       mv.registerEffect(GestureType::PalmUp,
+    //           [] { return std::make_unique<FireEffect>(); });
+    //   });
+    using SessionConfigurator = std::function<void(SessionModelView&)>;
+    void onSessionCreated(SessionConfigurator cfg) { configurator_ = std::move(cfg); }
+
 private:
     struct Session {
         std::unique_ptr<SessionModelView>    mv;
@@ -101,6 +112,7 @@ private:
     // Monotonically increasing conv ID counter (starts at 1, never 0x48564B43 "HVKC").
     uint32_t nextConv_ = 1;
 
-    std::atomic<bool> running_{false};
-    std::thread       readThread_;
+    std::atomic<bool>   running_{false};
+    std::thread         readThread_;
+    SessionConfigurator configurator_;
 };

@@ -121,6 +121,7 @@ Hub::Session& Hub::getOrCreate(const std::string& key) {
     Session s;
     s.mv = std::make_unique<SessionModelView>(voxelRes_);
     s.vc = std::make_unique<SessionViewController>(*s.mv, key);
+    if (configurator_) configurator_(*s.mv);
     sessions_[key] = std::move(s);
     std::cout << "[Hub] session created: " << key << "\n";
     return sessions_[key];
