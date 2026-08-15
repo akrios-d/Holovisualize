@@ -13,6 +13,7 @@
 #include <ikcp.h>
 
 #ifdef _WIN32
+#  define NOMINMAX            // prevent windows.h from defining min/max macros
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #  pragma comment(lib, "ws2_32.lib")
