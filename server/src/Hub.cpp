@@ -157,17 +157,10 @@ void Hub::readLoop() {
         memcpy(&conv, buf, 4);
 
         std::lock_guard<std::mutex> lock(mu_);
-        for (auto& [key, s] : sessions_) {
-            // Feed into the right KCP context.
-            // SessionViewController doesn't expose ikcp_input directly —
-            // we route by asking each session if it owns this conv.
-            // For performance, a flat conv→session map could replace this loop;
-            // with kMaxConsumersPerSession=32 and typical session counts <10 it's fine.
-            (void)conv; // routing via ikcp_input handled in SessionViewController below
-        }
-        // Delegate raw input feeding to each VC — it checks if it owns conv.
-        for (auto& [key, s] : sessions_) {
-            s.vc->feedKcpInput(conv, buf, n);
+        // Delegate raw input to each VC — it checks if it owns this conv.
+        // With kMaxConsumersPerSession=32 and typical session counts <10 this is fine.
+        for (auto& session : sessions_) {
+            session.second.vc->feedKcpInput(conv, buf, n);
         }
     }
 }

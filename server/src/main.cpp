@@ -11,9 +11,11 @@
 #include <csignal>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 // ─── Global state ─────────────────────────────────────────────────────────────
 
@@ -75,7 +77,7 @@ static bool parseCalibration(const std::string& text,
                           comma == std::string::npos ? std::string::npos : comma - pos);
         try {
             float v = std::stof(tok);
-            if (isnan(v) || isinf(v)) return false; // reject bad values
+            if (std::isnan(v) || std::isinf(v)) return false; // reject bad values
             out[idx++] = v;
         } catch (...) { return false; }
         if (comma == std::string::npos) break;
