@@ -383,7 +383,16 @@ int main(int argc, char* argv[]) {
 
         // ── Close ────────────────────────────────────────────────────────────
         else if (msg->type == ix::WebSocketMessageType::Close) {
-            if (isValidKey(sessionKey) && isValidSensorId(sensorId))
+            std::string sessionKey, sensorId;
+            { std::lock_guard<std::mutex> lk(connMu);
+              auto it = connMap.find(connId);
+              if (it != connMap.end()) {
+                  sessionKey = it->second.session;
+                  sensorId   = it->second.sensor;
+                  connMap.erase(it);
+              }
+            }
+            if (!sessionKey.empty())
                 std::cout << "[" << sessionKey << "] producer disconnected: "
                           << sensorId << "\n";
         }
