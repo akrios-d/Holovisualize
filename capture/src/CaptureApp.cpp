@@ -202,8 +202,7 @@ void CaptureApp::renderPreviewPanel() {
 
     ImGui::TextDisabled("Color (aligned to depth)");
     if (colorTex_)
-        ImGui::Image(reinterpret_cast<ImTextureID>(static_cast<uintptr_t>(colorTex_)),
-                     {imgW, imgH});
+        ImGui::Image((ImTextureID)(uintptr_t)colorTex_, {imgW, imgH});
     else
         ImGui::Dummy({imgW, imgH});
 
@@ -212,8 +211,7 @@ void CaptureApp::renderPreviewPanel() {
     ImGui::BeginGroup();
     ImGui::TextDisabled("Depth (false colour)");
     if (depthTex_)
-        ImGui::Image(reinterpret_cast<ImTextureID>(static_cast<uintptr_t>(depthTex_)),
-                     {imgW, imgH});
+        ImGui::Image((ImTextureID)(uintptr_t)depthTex_, {imgW, imgH});
     else
         ImGui::Dummy({imgW, imgH});
     ImGui::EndGroup();
