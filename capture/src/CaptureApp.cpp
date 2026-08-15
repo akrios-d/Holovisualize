@@ -156,6 +156,8 @@ void CaptureApp::renderConfigPanel() {
     bool busy = capturing_;
     if (busy) ImGui::BeginDisabled();
     if (ImGui::Button("  Connect & Stream  ", {-1, 40})) startCapture();
+    ImGui::Spacing();
+    if (ImGui::Button("  Preview Only (no server)  ", {-1, 32})) startPreviewOnly();
     if (busy) ImGui::EndDisabled();
 
     if (!busy) ImGui::BeginDisabled();
@@ -273,9 +275,17 @@ void CaptureApp::uploadPreviewTextures() {
 
 void CaptureApp::startCapture() {
     if (capturing_) return;
-    stopFlag_ = false;
+    stopFlag_  = false;
     capturing_ = true;
     captureThread_ = std::thread(&CaptureApp::captureLoop, this);
+}
+
+void CaptureApp::startPreviewOnly() {
+    if (capturing_) return;
+    config_.showPreview = true;
+    stopFlag_  = false;
+    capturing_ = true;
+    captureThread_ = std::thread(&CaptureApp::previewOnlyLoop, this);
 }
 
 void CaptureApp::stopCapture() {
@@ -285,6 +295,54 @@ void CaptureApp::stopCapture() {
     capturing_ = false;
     std::lock_guard<std::mutex> lk(statusMu_);
     status_ = {};
+}
+
+void CaptureApp::previewOnlyLoop() {
+    auto setMsg = [&](const std::string& m) {
+        std::lock_guard<std::mutex> lk(statusMu_);
+        status_.message = m;
+    };
+
+    Pipeline pipeline(std::make_unique<KinectV2Sensor>());
+
+    setMsg("Initialising sensor…");
+    if (!pipeline.initialize()) {
+        setMsg("ERROR: Failed to initialise sensor.");
+        capturing_ = false;
+        return;
+    }
+    { std::lock_guard<std::mutex> lk(statusMu_); status_.connected = true; }
+    setMsg("Preview only — not connected to server.");
+
+    auto fpsStart = std::chrono::steady_clock::now();
+    int  fpsCnt   = 0;
+    int  frameCnt = 0;
+
+    while (!stopFlag_) {
+        // Just capture and show — no sender
+        pipeline.process();
+        updatePreviewBuffers(pipeline.lastFrame());
+
+        fpsCnt++;
+        frameCnt++;
+
+        auto now     = std::chrono::steady_clock::now();
+        float elapsed = std::chrono::duration<float>(now - fpsStart).count();
+        if (elapsed >= 1.0f) {
+            float fps = fpsCnt / elapsed;
+            fpsCnt    = 0;
+            fpsStart  = now;
+            std::lock_guard<std::mutex> lk(statusMu_);
+            status_.fps        = fps;
+            status_.frameCount = frameCnt;
+            status_.points     = 0;
+            status_.message    = "Preview only — not connected to server.";
+        }
+    }
+
+    pipeline.shutdown();
+    std::lock_guard<std::mutex> lk(statusMu_);
+    status_.connected = false;
 }
 
 void CaptureApp::captureLoop() {

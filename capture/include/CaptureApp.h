@@ -55,8 +55,10 @@ private:
 
     // ── Capture thread ────────────────────────────────────────────────────────
     void startCapture();
+    void startPreviewOnly();   // opens sensor, shows preview, no server
     void stopCapture();
     void captureLoop();
+    void previewOnlyLoop();
 
     // ── Preview textures (written by capture thread, read by UI thread) ───────
     void uploadPreviewTextures();   // call from UI thread
