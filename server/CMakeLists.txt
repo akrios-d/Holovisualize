@@ -34,9 +34,10 @@ target_link_libraries(server PRIVATE
 )
 
 if(WIN32)
-    target_link_libraries(server PRIVATE ws2_32)
+    # ws2_32 for Winsock, bcrypt for BCryptGenRandom (mbedtls entropy)
+    target_link_libraries(server PRIVATE ws2_32 bcrypt)
 endif()
 
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
+if(NOT MSVC AND CMAKE_BUILD_TYPE STREQUAL "Release")
     target_compile_options(server PRIVATE -O3)
 endif()

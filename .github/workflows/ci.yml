@@ -62,10 +62,10 @@ jobs:
             capture/build/Release/*.dll
           retention-days: 30
 
-  # ── Server — Linux x64 binary ────────────────────────────────────────────────
+  # ── Server — Windows x64 exe ─────────────────────────────────────────────────
   server:
-    name: Build server (Linux x64)
-    runs-on: ubuntu-latest
+    name: Build server (Windows x64)
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -77,39 +77,42 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL',    process.env.ACTIONS_CACHE_URL)
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN)
 
-      - name: Install system deps
-        run: sudo apt-get install -y libssl-dev zlib1g-dev
-
       - name: Setup vcpkg
         run: |
-          git clone --depth=1 https://github.com/microsoft/vcpkg ~/vcpkg
-          ~/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          git clone --depth=1 https://github.com/microsoft/vcpkg C:/vcpkg
+          C:/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+        shell: cmd
 
       - name: Cache vcpkg binary packages
         uses: actions/cache@v4
         with:
-          path: ~/.cache/vcpkg/archives
-          key: vcpkg-linux-${{ hashFiles('server/vcpkg.json') }}
-          restore-keys: vcpkg-linux-
+          path: C:/Users/runneradmin/AppData/Local/vcpkg/archives
+          key: vcpkg-win-server-${{ hashFiles('server/vcpkg.json') }}
+          restore-keys: vcpkg-win-server-
 
       - name: Configure
         working-directory: server
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
         run: |
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake
+          cmake -B build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+            -DVCPKG_TARGET_TRIPLET=x64-windows
+        shell: pwsh
 
       - name: Build
         working-directory: server
         run: cmake --build build --config Release --parallel
+        shell: pwsh
 
-      - name: Upload binary
+      - name: Upload exe
         uses: actions/upload-artifact@v4
         with:
-          name: server-linux-x64
-          path: server/build/server
+          name: server-windows-x64
+          path: |
+            server/build/Release/server.exe
+            server/build/Release/*.dll
           retention-days: 30
 
   # ── Preview — Windows exe ────────────────────────────────────────────────────
