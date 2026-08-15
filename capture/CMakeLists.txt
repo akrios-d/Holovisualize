@@ -4,14 +4,19 @@ project(capture CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# --- Dependencies (install via vcpkg) ---
-# vcpkg install libfreenect2 ixwebsocket opencv4[contrib]
+# ── Dependencies ──────────────────────────────────────────────────────────────
 find_package(freenect2  REQUIRED)
 find_package(ixwebsocket REQUIRED)
-find_package(OpenCV     REQUIRED COMPONENTS core imgproc calib3d objdetect)
+find_package(OpenCV     REQUIRED COMPONENTS core imgproc highgui calib3d objdetect)
+find_package(glfw3      REQUIRED)
+find_package(GLEW       REQUIRED)
+find_package(OpenGL     REQUIRED)
+find_package(imgui      REQUIRED)
 
+# ── Sources ───────────────────────────────────────────────────────────────────
 add_executable(capture
     src/main.cpp
+    src/CaptureApp.cpp
     src/sensors/KinectV2Sensor.cpp
     src/Filter.cpp
     src/Segmentation.cpp
@@ -19,7 +24,8 @@ add_executable(capture
     src/Pipeline.cpp
     src/Sender.cpp
     src/Calibration.cpp
-    src/SceneFilter.cpp
+    src/filters/BodyFilter.cpp
+    src/filters/BackgroundSubtractorFilter.cpp
 )
 
 target_include_directories(capture PRIVATE
@@ -32,9 +38,12 @@ target_link_libraries(capture PRIVATE
     ${freenect2_LIBRARIES}
     ixwebsocket::ixwebsocket
     ${OpenCV_LIBS}
+    glfw
+    GLEW::GLEW
+    OpenGL::GL
+    imgui::imgui
 )
 
 if(WIN32)
-    # BCryptGenRandom is needed by mbedtls (pulled in by ixwebsocket)
     target_link_libraries(capture PRIVATE bcrypt ws2_32)
 endif()

@@ -7,6 +7,12 @@
     {
       "name": "opencv4",
       "features": ["contrib"]
-    }
+    },
+    {
+      "name": "imgui",
+      "features": ["glfw-binding", "opengl3-binding"]
+    },
+    "glfw3",
+    "glew"
   ]
 }

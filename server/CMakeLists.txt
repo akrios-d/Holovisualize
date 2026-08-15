@@ -24,6 +24,7 @@ add_executable(server
     src/Hub.cpp
     src/VoxelGrid.cpp
     src/MarchingCubes.cpp
+    src/EffectGenerator.cpp
 )
 
 target_include_directories(server PRIVATE include)
