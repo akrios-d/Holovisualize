@@ -15,16 +15,11 @@ bool KinectV2Sensor::initialize() {
         return false;
     }
 
-    // Try OpenGL pipeline first (GPU decode), fall back to CPU.
-    pipeline_ = new libfreenect2::OpenGLPacketPipeline();
+    // Use CPU pipeline — vcpkg's libfreenect2 port does not enable the
+    // optional OpenGL/CUDA/OpenCL pipelines.  The CPU decoder is always
+    // available and sufficient for multi-sensor capture at full 30 fps.
+    pipeline_ = new libfreenect2::CpuPacketPipeline();
     device_   = freenect2_.openDevice(0, pipeline_);
-
-    if (!device_) {
-        std::cerr << "[KinectV2] OpenGL pipeline failed, trying CPU.\n";
-        delete pipeline_;
-        pipeline_ = new libfreenect2::CpuPacketPipeline();
-        device_   = freenect2_.openDevice(0, pipeline_);
-    }
 
     if (!device_) {
         std::cerr << "[KinectV2] Could not open device.\n";
