@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <iomanip>
 #include <iostream>
@@ -74,7 +75,7 @@ static bool parseCalibration(const std::string& text,
                           comma == std::string::npos ? std::string::npos : comma - pos);
         try {
             float v = std::stof(tok);
-            if (std::isnan(v) || std::isinf(v)) return false; // reject bad values
+            if (isnan(v) || isinf(v)) return false; // reject bad values
             out[idx++] = v;
         } catch (...) { return false; }
         if (comma == std::string::npos) break;
@@ -299,21 +300,30 @@ int main(int argc, char* argv[]) {
     // Consumers connect via KCP/UDP (port 8081), not WebSocket.
     ix::WebSocketServer wsServer(wsPort, "0.0.0.0");
 
+    // Cache session/sensor per connection (URI is only available on Open).
+    struct ConnInfo { std::string session; std::string sensor; };
+    std::mutex connMu;
+    std::unordered_map<std::string, ConnInfo> connMap;
+
     wsServer.setOnClientMessageCallback(
-        [&hub](std::shared_ptr<ix::ConnectionState> state,
+        [&hub, &connMu, &connMap](std::shared_ptr<ix::ConnectionState> state,
                ix::WebSocket& ws,
                const ix::WebSocketMessagePtr& msg)
     {
-        const std::string& uri = state->getUri();
-        std::string query;
-        auto qpos = uri.find('?');
-        if (qpos != std::string::npos) query = uri.substr(qpos + 1);
-
-        std::string sessionKey = getParam(query, "session");
-        std::string sensorId   = getParam(query, "sensor");
+        const std::string connId = state->getId();
 
         // ── Open ────────────────────────────────────────────────────────────
         if (msg->type == ix::WebSocketMessageType::Open) {
+            // URI and query string are available in openInfo on the Open event.
+            const std::string& uri = msg->openInfo.uri;
+            std::string query;
+            auto qpos = uri.find('?');
+            if (qpos != std::string::npos) query = uri.substr(qpos + 1);
+
+            std::string sessionKey = getParam(query, "session");
+            std::string sensorId   = getParam(query, "sensor");
+            std::string role       = getParam(query, "role");
+
             // Validate all inputs at the boundary before any logic runs.
             if (!isValidKey(sessionKey)) {
                 ws.close(4000, "invalid or missing session");
@@ -324,17 +334,26 @@ int main(int argc, char* argv[]) {
                 return;
             }
             // This server only accepts producers. Consumers use KCP (UDP 8081).
-            std::string role = getParam(query, "role");
             if (role != "producer") {
                 ws.close(4002, "consumers must use KCP (UDP port 8081)");
                 return;
             }
+
+            { std::lock_guard<std::mutex> lk(connMu);
+              connMap[connId] = {sessionKey, sensorId}; }
+
             std::cout << "[" << sessionKey << "] producer connected: "
                       << sensorId << "\n";
         }
 
         // ── Message ──────────────────────────────────────────────────────────
         else if (msg->type == ix::WebSocketMessageType::Message) {
+            std::string sessionKey, sensorId;
+            { std::lock_guard<std::mutex> lk(connMu);
+              auto it = connMap.find(connId);
+              if (it == connMap.end()) return;
+              sessionKey = it->second.session;
+              sensorId   = it->second.sensor; }
             if (!isValidKey(sessionKey) || !isValidSensorId(sensorId)) return;
 
             if (!msg->binary) {

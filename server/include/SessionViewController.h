@@ -25,6 +25,7 @@
 
 #include <ikcp.h>    // vendored via FetchContent / CMake
 
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string>
