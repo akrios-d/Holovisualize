@@ -19,6 +19,7 @@ add_executable(capture
     src/Pipeline.cpp
     src/Sender.cpp
     src/Calibration.cpp
+    src/SceneFilter.cpp
 )
 
 target_include_directories(capture PRIVATE

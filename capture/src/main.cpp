@@ -1,6 +1,7 @@
 #include "Pipeline.h"
 #include "Calibration.h"
 #include "Sender.h"
+#include "SceneFilter.h"
 #include "sensors/KinectV2Sensor.h"
 
 #include <ixwebsocket/IXHttpClient.h>
@@ -71,20 +72,29 @@ static bool showPreview(const Frame& frame) {
 }
 
 // Usage:
-//   capture [host:port] [session] [sensor_id]               — stream mode
-//   capture [host:port] [session] [sensor_id] --calibrate   — calibrate mode
-//   capture [host:port] [session] [sensor_id] --preview     — stream + live preview window
+//   capture [host:port] [session] [sensor_id] [flags]
+//
+// Flags:
+//   --calibrate          calibrate sensor transform via ArUco marker
+//   --preview            show live OpenCV colour+depth windows
+//   --filter=body        keep only points inside human-body bounding box
+//   --filter=background  subtract static background (captures 30 frames first)
 int main(int argc, char* argv[]) {
     const std::string host     = argc > 1 ? argv[1] : "localhost:8080";
     const std::string session  = argc > 2 ? argv[2] : "demo";
     const std::string sensorId = argc > 3 ? argv[3] : "sensor0";
 
-    bool calibrateMode = false;
-    bool previewMode   = false;
+    bool calibrateMode   = false;
+    bool previewMode     = false;
+    bool filterBody      = false;
+    bool filterBg        = false;
+
     for (int i = 1; i < argc; i++) {
         std::string arg(argv[i]);
-        if (arg == "--calibrate") calibrateMode = true;
-        if (arg == "--preview")   previewMode   = true;
+        if (arg == "--calibrate")          calibrateMode = true;
+        if (arg == "--preview")            previewMode   = true;
+        if (arg == "--filter=body")        filterBody    = true;
+        if (arg == "--filter=background")  filterBg      = true;
     }
 
     Pipeline pipeline(std::make_unique<KinectV2Sensor>());
@@ -122,6 +132,18 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // ── Background subtraction setup ──────────────────────────────────────────
+    BackgroundSubtractor bgSub;
+    if (filterBg) {
+        std::cout << "Background subtraction: capturing background — keep the scene empty...\n";
+        while (!bgSub.isReady()) {
+            Frame tmp;
+            if (pipeline.sensor().captureFrame(tmp))
+                bgSub.learn(tmp);
+        }
+        std::cout << "Background model ready.\n";
+    }
+
     if (previewMode)
         std::cout << "Streaming. Press Q or ESC in the preview window to stop.\n";
     else
@@ -137,6 +159,17 @@ int main(int argc, char* argv[]) {
             std::cerr << "Capture failed, retrying...\n";
             continue;
         }
+
+        // Apply optional scene filters.
+        if (filterBg) {
+            // Background subtraction operates on the depth map inside pipeline.
+            // We re-run point cloud generation on the filtered frame.
+            Frame filtered = pipeline.lastFrame();
+            bgSub.apply(filtered);
+            cloud = generatePointCloud(filtered);
+        }
+        if (filterBody)
+            ::filterBody(cloud);
 
         bool ok = sender.send(cloud);
 

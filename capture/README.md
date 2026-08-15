@@ -76,6 +76,30 @@ capture.exe localhost:8080 demo sensor0
 capture.exe 192.168.1.10:8080 demo sensor0
 ```
 
+### Scene filters
+
+Pass one filter flag to control what gets streamed:
+
+| Flag | Description |
+|---|---|
+| _(none)_ | Stream everything the sensor captures |
+| `--filter=body` | Keep only points inside a human-body bounding box (±0.7 m lateral, 0–2.1 m height) |
+| `--filter=background` | Capture 30 background frames on startup, then stream only foreground (moving objects / people) |
+
+```bat
+# Body only
+capture.exe localhost:8080 demo sensor0 --filter=body
+
+# Background subtraction
+capture.exe localhost:8080 demo sensor0 --filter=background
+
+# Both — body bounds applied after background subtraction
+capture.exe localhost:8080 demo sensor0 --filter=background --filter=body
+```
+
+> `--filter=background` requires ~1 second of empty-scene frames on startup.
+> Keep the area clear until "Background model ready." appears in the console.
+
 ### Preview mode
 
 Add `--preview` to open two live OpenCV windows alongside streaming:
