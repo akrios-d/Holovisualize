@@ -1,0 +1,7 @@
+{
+  "name": "holovisualize-server",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "ixwebsocket"
+  ]
+}

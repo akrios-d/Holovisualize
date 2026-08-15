@@ -62,39 +62,55 @@ jobs:
             capture/build/Release/*.dll
           retention-days: 30
 
-  # ── Server — Docker image ────────────────────────────────────────────────────
+  # ── Server — Linux x64 binary ────────────────────────────────────────────────
   server:
-    name: Build server (Docker)
+    name: Build server (Linux x64)
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-      packages: write   # needed to push to GHCR
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # Login and push are disabled until a GHCR repository is set up.
-      # To enable: uncomment the login step and set push: true below.
-      # - name: Login to GitHub Container Registry
-      #   uses: docker/login-action@v3
-      #   with:
-      #     registry: ghcr.io
-      #     username: ${{ github.actor }}
-      #     password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build (no push)
-        uses: docker/build-push-action@v5
+      - name: Expose GHA cache to vcpkg
+        uses: actions/github-script@v7
         with:
-          context: .
-          file: server/Dockerfile
-          push: false
-          tags: holovisualize-server:dev
-          cache-from: type=gha
-          cache-to:   type=gha,mode=max
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL',    process.env.ACTIONS_CACHE_URL)
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN)
+
+      - name: Install system deps
+        run: sudo apt-get install -y libssl-dev zlib1g-dev
+
+      - name: Setup vcpkg
+        run: |
+          git clone --depth=1 https://github.com/microsoft/vcpkg ~/vcpkg
+          ~/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-linux-${{ hashFiles('server/vcpkg.json') }}
+          restore-keys: vcpkg-linux-
+
+      - name: Configure
+        working-directory: server
+        env:
+          VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Build
+        working-directory: server
+        run: cmake --build build --config Release --parallel
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-linux-x64
+          path: server/build/server
+          retention-days: 30
 
   # ── Preview — Windows exe ────────────────────────────────────────────────────
   preview:
