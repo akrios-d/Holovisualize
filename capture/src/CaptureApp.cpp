@@ -227,13 +227,31 @@ void CaptureApp::renderPreviewPanel() {
 // ── Preview textures ──────────────────────────────────────────────────────────
 
 void CaptureApp::updatePreviewBuffers(const Frame& frame) {
-    if (frame.colorAligned.empty() || frame.depth.empty()) return;
+    const int expected = kDepthW * kDepthH;
+    if (frame.colorAligned.size() < static_cast<size_t>(expected * 4)) return;
+    if (frame.depth.size()        < static_cast<size_t>(expected))     return;
 
+    // libfreenect2 registered frame is BGRX on Windows (B=0, G=1, R=2, X=3).
+    // Upload as RGB to OpenGL.
     std::vector<uint8_t> color(kDepthW * kDepthH * 3);
+    bool allBlack = true;
     for (int i = 0; i < kDepthW * kDepthH; i++) {
-        color[i * 3 + 0] = frame.colorAligned[i * 4 + 2]; // R
-        color[i * 3 + 1] = frame.colorAligned[i * 4 + 1]; // G
-        color[i * 3 + 2] = frame.colorAligned[i * 4 + 0]; // B
+        uint8_t b = frame.colorAligned[i * 4 + 0];
+        uint8_t g = frame.colorAligned[i * 4 + 1];
+        uint8_t r = frame.colorAligned[i * 4 + 2];
+        color[i * 3 + 0] = r;
+        color[i * 3 + 1] = g;
+        color[i * 3 + 2] = b;
+        if (r || g || b) allBlack = false;
+    }
+
+    // If all black, try RGBX layout (some libfreenect2 builds use this)
+    if (allBlack) {
+        for (int i = 0; i < kDepthW * kDepthH; i++) {
+            color[i * 3 + 0] = frame.colorAligned[i * 4 + 0]; // R
+            color[i * 3 + 1] = frame.colorAligned[i * 4 + 1]; // G
+            color[i * 3 + 2] = frame.colorAligned[i * 4 + 2]; // B
+        }
     }
 
     // False-colour depth via OpenCV JET colormap
@@ -319,9 +337,10 @@ void CaptureApp::previewOnlyLoop() {
     int  frameCnt = 0;
 
     while (!stopFlag_) {
-        // Just capture and show — no sender
-        pipeline.process();
-        updatePreviewBuffers(pipeline.lastFrame());
+        // Capture raw frame directly — skip point cloud generation entirely
+        Frame frame;
+        if (!pipeline.sensor().captureFrame(frame)) continue;
+        updatePreviewBuffers(frame);
 
         fpsCnt++;
         frameCnt++;
