@@ -4,6 +4,8 @@
 #include "sensors/KinectV2Sensor.h"
 
 #include <ixwebsocket/IXHttpClient.h>
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <iostream>
 #include <chrono>
@@ -39,18 +41,51 @@ static bool sendCalibration(const std::string& host,
     return true;
 }
 
+// Renders a live OpenCV preview window showing the colour-aligned-to-depth
+// frame and a false-colour depth heatmap.  Returns false if the user pressed
+// Q or ESC (caller should stop the loop).
+static bool showPreview(const Frame& frame) {
+    // ── Colour frame (aligned to depth, BGRX 512×424) ────────────────────────
+    if (!frame.colorAligned.empty()) {
+        cv::Mat bgrx(424, 512, CV_8UC4,
+                     const_cast<uint8_t*>(frame.colorAligned.data()));
+        cv::Mat bgr;
+        cv::cvtColor(bgrx, bgr, cv::COLOR_BGRA2BGR);
+        cv::imshow("Capture — Color (aligned)", bgr);
+    }
+
+    // ── Depth frame (float mm → false-colour heatmap) ────────────────────────
+    if (!frame.depth.empty()) {
+        cv::Mat depthF(424, 512, CV_32FC1,
+                       const_cast<float*>(frame.depth.data()));
+        cv::Mat depth8;
+        // Map [200 mm, 2500 mm] → [0, 255]
+        depthF.convertTo(depth8, CV_8UC1, 255.0 / 2300.0, -200.0 * 255.0 / 2300.0);
+        cv::Mat heatmap;
+        cv::applyColorMap(depth8, heatmap, cv::COLORMAP_JET);
+        cv::imshow("Capture — Depth", heatmap);
+    }
+
+    int key = cv::waitKey(1);
+    return (key != 'q' && key != 'Q' && key != 27 /*ESC*/);
+}
+
 // Usage:
 //   capture [host:port] [session] [sensor_id]               — stream mode
 //   capture [host:port] [session] [sensor_id] --calibrate   — calibrate mode
+//   capture [host:port] [session] [sensor_id] --preview     — stream + live preview window
 int main(int argc, char* argv[]) {
     const std::string host     = argc > 1 ? argv[1] : "localhost:8080";
     const std::string session  = argc > 2 ? argv[2] : "demo";
     const std::string sensorId = argc > 3 ? argv[3] : "sensor0";
 
     bool calibrateMode = false;
-    for (int i = 1; i < argc; i++)
-        if (std::string(argv[i]) == "--calibrate")
-            calibrateMode = true;
+    bool previewMode   = false;
+    for (int i = 1; i < argc; i++) {
+        std::string arg(argv[i]);
+        if (arg == "--calibrate") calibrateMode = true;
+        if (arg == "--preview")   previewMode   = true;
+    }
 
     Pipeline pipeline(std::make_unique<KinectV2Sensor>());
 
@@ -87,10 +122,14 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "Streaming. Press Ctrl+C to stop.\n";
+    if (previewMode)
+        std::cout << "Streaming. Press Q or ESC in the preview window to stop.\n";
+    else
+        std::cout << "Streaming. Press Ctrl+C to stop.\n";
 
     int frameCount = 0;
-    while (true) {
+    bool running   = true;
+    while (running) {
         auto t0 = std::chrono::steady_clock::now();
 
         PointCloud cloud = pipeline.process();
@@ -100,6 +139,9 @@ int main(int argc, char* argv[]) {
         }
 
         bool ok = sender.send(cloud);
+
+        if (previewMode)
+            running = showPreview(pipeline.lastFrame());
 
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - t0

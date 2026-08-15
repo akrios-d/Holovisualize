@@ -59,7 +59,7 @@ Binary: `build\Release\capture.exe`
 ### Stream mode
 
 ```bat
-capture.exe [host:port] [session] [sensor_id]
+capture.exe [host:port] [session] [sensor_id] [--preview] [--calibrate]
 ```
 
 | Argument | Default | Description |
@@ -75,6 +75,22 @@ capture.exe localhost:8080 demo sensor0
 # Remote server
 capture.exe 192.168.1.10:8080 demo sensor0
 ```
+
+### Preview mode
+
+Add `--preview` to open two live OpenCV windows alongside streaming:
+
+- **Color (aligned)** — colour frame registered to depth space (512×424)
+- **Depth** — false-colour depth heatmap (blue = near, red = far)
+
+Press **Q** or **ESC** in either window to stop.
+
+```bat
+capture.exe localhost:8080 demo sensor0 --preview
+```
+
+> The preview adds roughly 1–2 ms per frame (OpenCV `imshow` is non-blocking).
+> It is purely local — nothing extra is sent to the server.
 
 ### Calibration mode
 

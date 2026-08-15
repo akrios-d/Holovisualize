@@ -28,6 +28,9 @@ public:
     // Direct sensor access — used by calibration mode to get raw frames.
     ISensor& sensor() { return *sensor_; }
 
+    // Last captured frame — used by --preview mode to render OpenCV windows.
+    const Frame& lastFrame() const { return frame_; }
+
 private:
     std::unique_ptr<ISensor> sensor_;
     Frame frame_;
