@@ -1,0 +1,155 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Capture — Windows exe ────────────────────────────────────────────────────
+  capture:
+    name: Build capture (Windows x64)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Export GHA cache URLs so vcpkg binary caching works.
+      - name: Expose GHA cache to vcpkg
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL',    process.env.ACTIONS_CACHE_URL)
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN)
+
+      - name: Setup vcpkg
+        run: |
+          git clone --depth=1 https://github.com/microsoft/vcpkg C:/vcpkg
+          C:/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+        shell: cmd
+
+      # vcpkg binary cache — pre-compiled packages are reused across runs.
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@v4
+        with:
+          path: C:/Users/runneradmin/AppData/Local/vcpkg/archives
+          key: vcpkg-win-${{ hashFiles('capture/vcpkg.json') }}
+          restore-keys: vcpkg-win-
+
+      - name: Configure
+        working-directory: capture
+        env:
+          VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+        run: |
+          cmake -B build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+            -DVCPKG_TARGET_TRIPLET=x64-windows
+        shell: pwsh
+
+      - name: Build
+        working-directory: capture
+        run: cmake --build build --config Release --parallel
+        shell: pwsh
+
+      - name: Upload exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: capture-windows-x64
+          path: |
+            capture/build/Release/capture.exe
+            capture/build/Release/*.dll
+          retention-days: 30
+
+  # ── Server — Docker image ────────────────────────────────────────────────────
+  server:
+    name: Build server (Docker)
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write   # needed to push to GHCR
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Login and push are disabled until a GHCR repository is set up.
+      # To enable: uncomment the login step and set push: true below.
+      # - name: Login to GitHub Container Registry
+      #   uses: docker/login-action@v3
+      #   with:
+      #     registry: ghcr.io
+      #     username: ${{ github.actor }}
+      #     password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./server
+          push: false
+          tags: holovisualize-server:dev
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+  # ── Preview — Windows exe ────────────────────────────────────────────────────
+  preview:
+    name: Build preview (Windows x64)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Expose GHA cache to vcpkg
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL',    process.env.ACTIONS_CACHE_URL)
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN)
+
+      - name: Setup vcpkg
+        run: |
+          git clone --depth=1 https://github.com/microsoft/vcpkg C:/vcpkg
+          C:/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+        shell: cmd
+
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@v4
+        with:
+          path: C:/Users/runneradmin/AppData/Local/vcpkg/archives
+          key: vcpkg-win-preview-${{ hashFiles('preview/CMakeLists.txt') }}
+          restore-keys: vcpkg-win-preview-
+
+      - name: Install preview deps
+        env:
+          VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+        run: C:/vcpkg/vcpkg install glfw3:x64-windows --triplet x64-windows
+        shell: cmd
+
+      - name: Configure
+        working-directory: preview
+        env:
+          VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+        run: |
+          cmake -B build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+            -DVCPKG_TARGET_TRIPLET=x64-windows
+        shell: pwsh
+
+      - name: Build
+        working-directory: preview
+        run: cmake --build build --config Release --parallel
+        shell: pwsh
+
+      - name: Upload exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-windows-x64
+          path: |
+            preview/build/Release/preview.exe
+            preview/build/Release/*.dll
+          retention-days: 30

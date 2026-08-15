@@ -1,0 +1,13 @@
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"        # WebSocket — producers
+      - "8081:8081/udp"    # KCP — consumers
+      - "8082:8082"        # HTTP dashboard
+    restart: unless-stopped
+    # Increase for very large point clouds / many sensors:
+    # environment:
+    #   - VOXEL_RES=192

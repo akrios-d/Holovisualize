@@ -1,0 +1,12 @@
+{
+  "name": "holovisualize-capture",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "libfreenect2",
+    "ixwebsocket",
+    {
+      "name": "opencv4",
+      "features": ["contrib"]
+    }
+  ]
+}
