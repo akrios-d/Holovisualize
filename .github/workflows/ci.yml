@@ -115,6 +115,39 @@ jobs:
             server/build/Release/*.dll
           retention-days: 30
 
+  # ── Server — Docker image ────────────────────────────────────────────────────
+  server-docker:
+    name: Build server (Docker)
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Uncomment + set push: true when GHCR is ready:
+      # - name: Login to GitHub Container Registry
+      #   uses: docker/login-action@v3
+      #   with:
+      #     registry: ghcr.io
+      #     username: ${{ github.actor }}
+      #     password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: server/Dockerfile
+          push: false
+          tags: holovisualize-server:dev
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
   # ── Preview — Windows exe ────────────────────────────────────────────────────
   preview:
     name: Build preview (Windows x64)
