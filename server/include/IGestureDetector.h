@@ -13,18 +13,21 @@ struct Mesh;
 // Implement this interface to add a new gesture recogniser.
 // The server calls detect() once per merged mesh frame and collects all events.
 //
-// Minimal example — detect when any vertex is above 1.8 m (raised hand):
+// Minimal example — detect ArmsRaised when the mesh centroid Y exceeds 1.6 m:
 //
-//   class RaisedHandDetector : public IGestureDetector {
+//   class ArmsRaisedDetector : public IGestureDetector {
 //   public:
 //       std::vector<GestureEvent> detect(const Mesh& mesh,
 //                                        uint64_t nowMs) override {
-//           for (auto& v : mesh.vertices)
-//               if (v.y > 1.8f)
-//                   return {{ GestureType::OpenHand, {v.x,v.y,v.z}, 0.9f, nowMs }};
+//           if (mesh.vertices.empty()) return {};
+//           float sumY = 0;
+//           for (auto& v : mesh.vertices) sumY += v.y;
+//           float cy = sumY / mesh.vertices.size();
+//           if (cy > 1.6f)
+//               return {{ GestureType::ArmsRaised, {0,cy,0}, {}, 0.85f, nowMs }};
 //           return {};
 //       }
-//       const char* name() const override { return "Raised Hand"; }
+//       const char* name() const override { return "Arms Raised"; }
 //   };
 class IGestureDetector {
 public:
