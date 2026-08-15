@@ -126,7 +126,7 @@ jobs:
       - name: Install preview deps
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-        run: C:/vcpkg/vcpkg install glfw3:x64-windows --triplet x64-windows
+        run: C:/vcpkg/vcpkg install glfw3:x64-windows glew:x64-windows --triplet x64-windows
         shell: cmd
 
       - name: Configure

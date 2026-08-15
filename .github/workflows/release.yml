@@ -93,7 +93,7 @@ jobs:
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
         run: |
-          C:/vcpkg/vcpkg install glfw3:x64-windows
+          C:/vcpkg/vcpkg install glfw3:x64-windows glew:x64-windows
           cmake -B preview/build `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `

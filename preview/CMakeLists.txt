@@ -5,8 +5,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
-# vcpkg install glfw3 opengl
+# vcpkg install glfw3 glew opengl
 find_package(glfw3   REQUIRED)
+find_package(GLEW    REQUIRED)
 find_package(OpenGL  REQUIRED)
 
 # ikcp — same as server, pulled via FetchContent
@@ -31,6 +32,7 @@ target_include_directories(preview PRIVATE
 target_link_libraries(preview PRIVATE
     ikcp
     glfw
+    GLEW::GLEW
     OpenGL::GL
 )
 

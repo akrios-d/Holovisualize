@@ -25,13 +25,14 @@
 #  define closesocket close
 #endif
 
+// GLEW must be included before any OpenGL or GLFW header.
+// It provides all OpenGL 1.2+ extension entry points on Windows/Linux.
+#include <GL/glew.h>
 #include <GLFW/glfw3.h>
-#ifdef __APPLE__
-#  include <OpenGL/gl3.h>
-#else
-#  include <GL/gl.h>
-#endif
 
+#ifdef _WIN32
+#  define _USE_MATH_DEFINES   // expose M_PI in <cmath> on MSVC
+#endif
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -312,6 +313,11 @@ int main(int argc, char* argv[]) {
     GLFWwindow* window = glfwCreateWindow(1280, 720, "Holovisualize Preview", nullptr, nullptr);
     if (!window) { fprintf(stderr,"Window failed\n"); g_running=false; kcp.join(); glfwTerminate(); return 1; }
     glfwMakeContextCurrent(window);
+    glewExperimental = GL_TRUE;
+    if (glewInit() != GLEW_OK) {
+        fprintf(stderr, "GLEW init failed\n");
+        g_running = false; kcp.join(); glfwTerminate(); return 1;
+    }
     glfwSwapInterval(1);
     glfwSetMouseButtonCallback(window, onMouseBtn);
     glfwSetCursorPosCallback(window,   onMouseMove);
