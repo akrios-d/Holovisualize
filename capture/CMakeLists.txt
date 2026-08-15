@@ -28,7 +28,7 @@ target_include_directories(capture PRIVATE
 )
 
 target_link_libraries(capture PRIVATE
-    freenect2
+    ${freenect2_LIBRARIES}
     ixwebsocket::ixwebsocket
     ${OpenCV_LIBS}
 )
