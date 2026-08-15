@@ -32,3 +32,8 @@ target_link_libraries(capture PRIVATE
     ixwebsocket::ixwebsocket
     ${OpenCV_LIBS}
 )
+
+if(WIN32)
+    # BCryptGenRandom is needed by mbedtls (pulled in by ixwebsocket)
+    target_link_libraries(capture PRIVATE bcrypt ws2_32)
+endif()
