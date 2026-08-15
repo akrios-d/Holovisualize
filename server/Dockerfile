@@ -14,15 +14,16 @@ RUN git clone --depth=1 https://github.com/microsoft/vcpkg ${VCPKG_ROOT} && \
 # Install only what the server needs (no Kinect, no OpenCV)
 RUN ${VCPKG_ROOT}/vcpkg install ixwebsocket --triplet x64-linux
 
-# Copy source
+# Copy source (build context must be the repo root, not server/)
 WORKDIR /app
-COPY . .
+COPY server/ server/
+COPY third_party/ third_party/
 
 # Build
-RUN cmake -B build \
+RUN cmake -B server/build -S server \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake \
-    && cmake --build build --config Release -j$(nproc)
+    && cmake --build server/build --config Release -j$(nproc)
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
@@ -31,7 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libssl3 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/build/server /usr/local/bin/holovisualize-server
+COPY --from=builder /app/server/build/server /usr/local/bin/holovisualize-server
 
 EXPOSE 8080 8081/udp 8082
 

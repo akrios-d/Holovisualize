@@ -89,7 +89,8 @@ jobs:
       - name: Build (no push)
         uses: docker/build-push-action@v5
         with:
-          context: ./server
+          context: .
+          file: server/Dockerfile
           push: false
           tags: holovisualize-server:dev
           cache-from: type=gha

@@ -1,8 +1,8 @@
 services:
   server:
     build:
-      context: ./server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: server/Dockerfile
     ports:
       - "8080:8080"        # WebSocket — producers
       - "8081:8081/udp"    # KCP — consumers
