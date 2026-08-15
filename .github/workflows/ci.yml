@@ -29,13 +29,21 @@ jobs:
           C:/vcpkg/bootstrap-vcpkg.bat -disableMetrics
         shell: cmd
 
+      # vcpkg installed output — fastest restore (no recompile needed).
+      - name: Cache vcpkg installed
+        uses: actions/cache@v4
+        with:
+          path: capture/vcpkg_installed
+          key: vcpkg-installed-capture-${{ hashFiles('capture/vcpkg.json') }}
+          restore-keys: vcpkg-installed-capture-
+
       # vcpkg binary cache — pre-compiled packages are reused across runs.
       - name: Cache vcpkg binary packages
         uses: actions/cache@v4
         with:
           path: C:/Users/runneradmin/AppData/Local/vcpkg/archives
-          key: vcpkg-win-${{ hashFiles('capture/vcpkg.json') }}
-          restore-keys: vcpkg-win-
+          key: vcpkg-archives-capture-${{ hashFiles('capture/vcpkg.json') }}
+          restore-keys: vcpkg-archives-capture-
 
       - name: Configure
         working-directory: capture
@@ -83,12 +91,19 @@ jobs:
           C:/vcpkg/bootstrap-vcpkg.bat -disableMetrics
         shell: cmd
 
+      - name: Cache vcpkg installed
+        uses: actions/cache@v4
+        with:
+          path: server/vcpkg_installed
+          key: vcpkg-installed-server-${{ hashFiles('server/vcpkg.json') }}
+          restore-keys: vcpkg-installed-server-
+
       - name: Cache vcpkg binary packages
         uses: actions/cache@v4
         with:
           path: C:/Users/runneradmin/AppData/Local/vcpkg/archives
-          key: vcpkg-win-server-${{ hashFiles('server/vcpkg.json') }}
-          restore-keys: vcpkg-win-server-
+          key: vcpkg-archives-server-${{ hashFiles('server/vcpkg.json') }}
+          restore-keys: vcpkg-archives-server-
 
       - name: Configure
         working-directory: server
@@ -169,12 +184,19 @@ jobs:
           C:/vcpkg/bootstrap-vcpkg.bat -disableMetrics
         shell: cmd
 
+      - name: Cache vcpkg installed
+        uses: actions/cache@v4
+        with:
+          path: preview/vcpkg_installed
+          key: vcpkg-installed-preview-${{ hashFiles('preview/CMakeLists.txt') }}
+          restore-keys: vcpkg-installed-preview-
+
       - name: Cache vcpkg binary packages
         uses: actions/cache@v4
         with:
           path: C:/Users/runneradmin/AppData/Local/vcpkg/archives
-          key: vcpkg-win-preview-${{ hashFiles('preview/CMakeLists.txt') }}
-          restore-keys: vcpkg-win-preview-
+          key: vcpkg-archives-preview-${{ hashFiles('preview/CMakeLists.txt') }}
+          restore-keys: vcpkg-archives-preview-
 
       - name: Install preview deps
         env:
