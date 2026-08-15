@@ -16,7 +16,7 @@ FetchContent_Declare(kcp
     GIT_REPOSITORY https://github.com/skywind3000/kcp.git
     GIT_TAG        master
     GIT_SHALLOW    TRUE)
-FetchContent_MakeAvailable(kcp)
+FetchContent_Populate(kcp)
 
 add_library(ikcp STATIC ${kcp_SOURCE_DIR}/ikcp.c)
 target_include_directories(ikcp PUBLIC ${kcp_SOURCE_DIR})

@@ -8,13 +8,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # vcpkg install ixwebsocket
 find_package(ixwebsocket REQUIRED)
 
-# ikcp — pulled from GitHub, compiled as a small static lib.
+# ikcp — pulled from GitHub, compiled directly (bypasses kcp's CMakeLists.txt
+# which recently bumped cmake_minimum_required to 4.0).
 include(FetchContent)
 FetchContent_Declare(kcp
     GIT_REPOSITORY https://github.com/skywind3000/kcp.git
     GIT_TAG        master
     GIT_SHALLOW    TRUE)
-FetchContent_MakeAvailable(kcp)
+# Populate source only — do NOT call FetchContent_MakeAvailable which would
+# process kcp's own CMakeLists.txt and fail on the version requirement.
+FetchContent_Populate(kcp)
 
 add_library(ikcp STATIC ${kcp_SOURCE_DIR}/ikcp.c)
 target_include_directories(ikcp PUBLIC ${kcp_SOURCE_DIR})
