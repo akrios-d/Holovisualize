@@ -1,8 +1,13 @@
 #include "CaptureApp.h"
 #include "Pipeline.h"
-#include "Calibration.h"
 #include "Sender.h"
 #include "sensors/KinectV2Sensor.h"
+
+#ifdef HOLOVISUALIZE_OPENCV
+#  include "Calibration.h"
+#  include "filters/BackgroundSubtractorFilter.h"
+#endif
+#include "filters/BodyFilter.h"
 
 #include <ixwebsocket/IXHttpClient.h>
 
@@ -72,6 +77,7 @@ int main(int argc, char* argv[]) {
 
     // ── Calibration mode (headless) ───────────────────────────────────────────
     if (calibrateMode) {
+#ifdef HOLOVISUALIZE_OPENCV
         std::cout << "Calibration mode — point sensor at ArUco marker (ID 0, 5 cm).\n";
 
         Pipeline pipeline(std::make_unique<KinectV2Sensor>());
@@ -88,6 +94,10 @@ int main(int argc, char* argv[]) {
         }
         pipeline.shutdown();
         return sendCalibration(host, session, sensorId, cal.getTransform()) ? 0 : 1;
+#else
+        std::cerr << "Calibration requires OpenCV. Rebuild with -DHOLOVISUALIZE_OPENCV=ON.\n";
+        return 1;
+#endif
     }
 
     // ── GUI mode (default) ────────────────────────────────────────────────────
@@ -106,7 +116,11 @@ int main(int argc, char* argv[]) {
 
     // ── Headless stream mode ──────────────────────────────────────────────────
     Pipeline pipeline(std::make_unique<KinectV2Sensor>());
+#ifdef HOLOVISUALIZE_OPENCV
     if (filterBg) pipeline.addFilter(std::make_unique<BackgroundSubtractorFilter>());
+#else
+    if (filterBg) std::cerr << "[warn] --filter=background requires OpenCV build; ignored.\n";
+#endif
     if (filterBody) pipeline.addFilter(std::make_unique<BodyFilter>());
 
     if (!pipeline.initialize()) {
