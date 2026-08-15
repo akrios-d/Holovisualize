@@ -2,16 +2,9 @@
 FROM debian:bookworm-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential ninja-build git curl zip unzip \
+        build-essential cmake ninja-build git curl zip unzip \
         pkg-config libssl-dev zlib1g-dev ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-# Debian Bookworm ships CMake 3.25; kcp's CMakeLists.txt requires 3.31+.
-# Download the official Linux binary from cmake.org instead.
-RUN curl -fsSL https://github.com/Kitware/CMake/releases/download/v3.31.7/cmake-3.31.7-linux-x86_64.sh \
-        -o /tmp/cmake-install.sh && \
-    sh /tmp/cmake-install.sh --skip-license --prefix=/usr/local && \
-    rm /tmp/cmake-install.sh
 
 # vcpkg
 ENV VCPKG_ROOT=/vcpkg

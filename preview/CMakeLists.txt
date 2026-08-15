@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(holovisualize-preview CXX)
+project(holovisualize-preview C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,16 +10,9 @@ find_package(glfw3   REQUIRED)
 find_package(GLEW    REQUIRED)
 find_package(OpenGL  REQUIRED)
 
-# ikcp — same as server, pulled via FetchContent
-include(FetchContent)
-FetchContent_Declare(kcp
-    GIT_REPOSITORY https://github.com/skywind3000/kcp.git
-    GIT_TAG        master
-    GIT_SHALLOW    TRUE)
-FetchContent_Populate(kcp)
-
-add_library(ikcp STATIC ${kcp_SOURCE_DIR}/ikcp.c)
-target_include_directories(ikcp PUBLIC ${kcp_SOURCE_DIR})
+# ikcp — vendored in third_party/kcp (avoids FetchContent + kcp's CMake 4.0 req)
+add_library(ikcp STATIC ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/kcp/ikcp.c)
+target_include_directories(ikcp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/kcp)
 target_compile_definitions(ikcp PRIVATE _CRT_SECURE_NO_WARNINGS)
 
 # ── Preview executable ────────────────────────────────────────────────────────
