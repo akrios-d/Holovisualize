@@ -1,13 +1,8 @@
 #include "CaptureApp.h"
 #include "Pipeline.h"
 #include "Sender.h"
-#ifdef HOLOVISUALIZE_KINECT_V1
-#  include "sensors/KinectV1Sensor.h"
-#  define MAKE_SENSOR() std::make_unique<KinectV1Sensor>()
-#else
-#  include "sensors/KinectV2Sensor.h"
-#  define MAKE_SENSOR() std::make_unique<KinectV2Sensor>()
-#endif
+#include "sensors/KinectV2Sensor.h"
+#define MAKE_SENSOR() std::make_unique<KinectV2Sensor>()
 
 #include <csignal>
 #include <cstdlib>

@@ -1,19 +1,13 @@
 #include "CaptureApp.h"
 #include "PointCloud.h"
-#ifdef HOLOVISUALIZE_KINECT_V1
-#  include "sensors/KinectV1Sensor.h"
-#  define MAKE_SENSOR() std::make_unique<KinectV1Sensor>()
-#else
-#  include "sensors/KinectV2Sensor.h"
-#  define MAKE_SENSOR() std::make_unique<KinectV2Sensor>()
-#endif
+#include "sensors/KinectV2Sensor.h"
+#define MAKE_SENSOR() std::make_unique<KinectV2Sensor>(window_)
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
-
-#include <chrono>
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 
@@ -23,8 +17,10 @@ CaptureApp::CaptureApp(CaptureConfig initial) : config_(initial) {}
 
 CaptureApp::~CaptureApp() {
     stopCapture();
-    if (colorTex_) glDeleteTextures(1, &colorTex_);
-    if (depthTex_) glDeleteTextures(1, &depthTex_);
+    if (colorTex_)      glDeleteTextures(1, &colorTex_);
+    if (depthTex_)      glDeleteTextures(1, &depthTex_);
+    if (irTex_)         glDeleteTextures(1, &irTex_);
+    if (registeredTex_) glDeleteTextures(1, &registeredTex_);
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
@@ -41,7 +37,7 @@ bool CaptureApp::initWindow() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    window_ = glfwCreateWindow(1100, 700, "Holovisualize — Capture", nullptr, nullptr);
+    window_ = glfwCreateWindow(1280, 820, "Holovisualize — Capture", nullptr, nullptr);
     if (!window_) { std::cerr << "[UI] glfwCreateWindow failed\n"; return false; }
 
     glfwMakeContextCurrent(window_);
@@ -72,6 +68,8 @@ bool CaptureApp::initWindow() {
     };
     makeTexture(colorTex_);
     makeTexture(depthTex_);
+    makeTexture(irTex_);
+    makeTexture(registeredTex_);
 
     return true;
 }
@@ -83,6 +81,11 @@ void CaptureApp::run() {
 
     while (!glfwWindowShouldClose(window_)) {
         glfwPollEvents();
+
+        // The capture thread self-signals stopFlag_ if it exits on its own
+        // (e.g. failed to connect to the server) — finish tearing it down
+        // here, since pipeline_ teardown must happen on this (UI) thread.
+        if (capturing_ && stopFlag_) stopCapture();
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -118,7 +121,19 @@ void CaptureApp::renderFrame() {
     renderConfigPanel();
 
     ImGui::End();
-    // preview disabled for debug
+
+    // Right panel — status + preview
+    ImGui::SetNextWindowPos({380, 0}, ImGuiCond_Always);
+    ImGui::SetNextWindowSize({io.DisplaySize.x - 380, io.DisplaySize.y}, ImGuiCond_Always);
+    ImGui::Begin("##right", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoScrollbar);
+
+    renderStatusPanel();
+    ImGui::Spacing();
+    if (config_.showPreview) renderPreviewPanel();
+
+    ImGui::End();
 }
 
 void CaptureApp::renderConfigPanel() {
@@ -185,26 +200,22 @@ void CaptureApp::renderPreviewPanel() {
     const float imgW  = avail * 0.5f - 4.0f;
     const float imgH  = imgW * kDepthH / kDepthW;
 
-    ImGui::TextDisabled("Color (aligned to depth)");
-    if (colorTex_)
-        ImGui::Image((ImTextureID)(uintptr_t)colorTex_, {imgW, imgH});
-    else
-        ImGui::Dummy({imgW, imgH});
+    auto showImg = [&](const char* label, GLuint tex) {
+        ImGui::BeginGroup();
+        ImGui::TextDisabled("%s", label);
+        if (tex) ImGui::Image((ImTextureID)(uintptr_t)tex, {imgW, imgH});
+        else     ImGui::Dummy({imgW, imgH});
+        ImGui::EndGroup();
+    };
 
+    // 2x2 grid, matching Protonect's viewer layout: Color, Depth, IR, Registered
+    showImg("Color",      colorTex_);
     ImGui::SameLine();
+    showImg("Depth (false colour)", depthTex_);
 
-    ImGui::BeginGroup();
-    ImGui::TextDisabled("Depth (false colour)");
-    if (depthTex_)
-        ImGui::Image((ImTextureID)(uintptr_t)depthTex_, {imgW, imgH});
-    else
-        ImGui::Dummy({imgW, imgH});
-    ImGui::EndGroup();
-
-    if (!colorTex_ || !depthTex_) {
-        ImGui::Spacing();
-        ImGui::TextDisabled("Waiting for first frame…");
-    }
+    showImg("IR",         irTex_);
+    ImGui::SameLine();
+    showImg("Registered", registeredTex_);
 }
 
 // ── Preview textures ──────────────────────────────────────────────────────────
@@ -215,25 +226,41 @@ void CaptureApp::updatePreviewBuffers(const Frame& frame) {
     if (frame.depth.size()        < static_cast<size_t>(expected))     return;
 
     // libfreenect2 registered frame is BGRX on Windows (B=0, G=1, R=2, X=3).
-    // Upload as RGB to OpenGL.
-    std::vector<uint8_t> color(kDepthW * kDepthH * 3);
+    std::vector<uint8_t> registered(kDepthW * kDepthH * 3);
     bool allBlack = true;
     for (int i = 0; i < kDepthW * kDepthH; i++) {
         uint8_t b = frame.colorAligned[i * 4 + 0];
         uint8_t g = frame.colorAligned[i * 4 + 1];
         uint8_t r = frame.colorAligned[i * 4 + 2];
-        color[i * 3 + 0] = r;
-        color[i * 3 + 1] = g;
-        color[i * 3 + 2] = b;
+        registered[i * 3 + 0] = r;
+        registered[i * 3 + 1] = g;
+        registered[i * 3 + 2] = b;
         if (r || g || b) allBlack = false;
     }
-
     // If all black, try RGBX layout (some libfreenect2 builds use this)
     if (allBlack) {
         for (int i = 0; i < kDepthW * kDepthH; i++) {
-            color[i * 3 + 0] = frame.colorAligned[i * 4 + 0]; // R
-            color[i * 3 + 1] = frame.colorAligned[i * 4 + 1]; // G
-            color[i * 3 + 2] = frame.colorAligned[i * 4 + 2]; // B
+            registered[i * 3 + 0] = frame.colorAligned[i * 4 + 0]; // R
+            registered[i * 3 + 1] = frame.colorAligned[i * 4 + 1]; // G
+            registered[i * 3 + 2] = frame.colorAligned[i * 4 + 2]; // B
+        }
+    }
+
+    // Full-res colour, nearest-neighbour downsampled to the depth resolution
+    // for display purposes.
+    std::vector<uint8_t> color(kDepthW * kDepthH * 3, 0);
+    if (frame.colorWidth > 0 && frame.colorHeight > 0 &&
+        frame.color.size() >= static_cast<size_t>(frame.colorWidth * frame.colorHeight * 4)) {
+        for (int y = 0; y < kDepthH; y++) {
+            int sy = y * frame.colorHeight / kDepthH;
+            for (int x = 0; x < kDepthW; x++) {
+                int sx = x * frame.colorWidth / kDepthW;
+                size_t src = (static_cast<size_t>(sy) * frame.colorWidth + sx) * 4;
+                size_t dst = (static_cast<size_t>(y) * kDepthW + x) * 3;
+                color[dst + 0] = frame.color[src + 2]; // R
+                color[dst + 1] = frame.color[src + 1]; // G
+                color[dst + 2] = frame.color[src + 0]; // B
+            }
         }
     }
 
@@ -253,10 +280,24 @@ void CaptureApp::updatePreviewBuffers(const Frame& frame) {
         depth[i * 3 + 2] = static_cast<uint8_t>(b * 255);
     }
 
+    // IR — grayscale, normalised the same way Protonect's viewer does (/4500).
+    std::vector<uint8_t> ir(kDepthW * kDepthH * 3, 0);
+    if (frame.ir.size() >= static_cast<size_t>(expected)) {
+        for (int i = 0; i < kDepthW * kDepthH; i++) {
+            float v = std::max(0.f, std::min(1.f, frame.ir[i] / 4500.f));
+            uint8_t g = static_cast<uint8_t>(v * 255);
+            ir[i * 3 + 0] = g;
+            ir[i * 3 + 1] = g;
+            ir[i * 3 + 2] = g;
+        }
+    }
+
     std::lock_guard<std::mutex> lk(texMu_);
-    colorBuf_ = std::move(color);
-    depthBuf_ = std::move(depth);
-    texDirty_ = true;
+    colorBuf_      = std::move(color);
+    depthBuf_      = std::move(depth);
+    irBuf_         = std::move(ir);
+    registeredBuf_ = std::move(registered);
+    texDirty_      = true;
 }
 
 void CaptureApp::uploadPreviewTextures() {
@@ -265,19 +306,43 @@ void CaptureApp::uploadPreviewTextures() {
     texDirty_ = false;
 
     auto upload = [](GLuint tex, const std::vector<uint8_t>& buf, int w, int h) {
+        if (buf.empty()) return;
         glBindTexture(GL_TEXTURE_2D, tex);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0,
                      GL_RGB, GL_UNSIGNED_BYTE, buf.data());
         glBindTexture(GL_TEXTURE_2D, 0);
     };
-    upload(colorTex_, colorBuf_, kDepthW, kDepthH);
-    upload(depthTex_, depthBuf_, kDepthW, kDepthH);
+    upload(colorTex_,      colorBuf_,      kDepthW, kDepthH);
+    upload(depthTex_,      depthBuf_,      kDepthW, kDepthH);
+    upload(irTex_,         irBuf_,         kDepthW, kDepthH);
+    upload(registeredTex_, registeredBuf_, kDepthW, kDepthH);
 }
 
 // ── Capture thread ────────────────────────────────────────────────────────────
 
 void CaptureApp::startCapture() {
     if (capturing_) return;
+
+    // Pipeline construction (and therefore the OpenGL depth context, which
+    // shares resources with window_) must happen on this — the UI — thread.
+    pipeline_ = std::make_unique<Pipeline>(MAKE_SENSOR());
+    if (config_.filterBackground)
+        pipeline_->addFilter(std::make_unique<BackgroundSubtractorFilter>());
+    if (config_.filterBody)
+        pipeline_->addFilter(std::make_unique<BodyFilter>());
+
+    {
+        std::lock_guard<std::mutex> lk(statusMu_);
+        status_ = {};
+        status_.message = "Initialising sensor…";
+    }
+    if (!pipeline_->initialize()) {
+        std::lock_guard<std::mutex> lk(statusMu_);
+        status_.message = "ERROR: Failed to initialise sensor.";
+        pipeline_.reset();
+        return;
+    }
+
     stopFlag_  = false;
     capturing_ = true;
     captureThread_ = std::thread(&CaptureApp::captureLoop, this);
@@ -285,6 +350,21 @@ void CaptureApp::startCapture() {
 
 void CaptureApp::startPreviewOnly() {
     if (capturing_) return;
+
+    pipeline_ = std::make_unique<Pipeline>(MAKE_SENSOR());
+
+    {
+        std::lock_guard<std::mutex> lk(statusMu_);
+        status_ = {};
+        status_.message = "Initialising sensor…";
+    }
+    if (!pipeline_->initialize()) {
+        std::lock_guard<std::mutex> lk(statusMu_);
+        status_.message = "ERROR: Failed to initialise sensor.";
+        pipeline_.reset();
+        return;
+    }
+
     config_.showPreview = true;
     stopFlag_  = false;
     capturing_ = true;
@@ -296,6 +376,12 @@ void CaptureApp::stopCapture() {
     stopFlag_ = true;
     if (captureThread_.joinable()) captureThread_.join();
     capturing_ = false;
+
+    // Runs on the UI thread — matches where the GL-context-owning pipeline
+    // was constructed, which OpenGLPacketPipeline's teardown requires.
+    if (sender_)   { sender_->disconnect(); sender_.reset(); }
+    if (pipeline_) { pipeline_->shutdown(); pipeline_.reset(); }
+
     std::lock_guard<std::mutex> lk(statusMu_);
     status_ = {};
 }
@@ -306,21 +392,10 @@ void CaptureApp::previewOnlyLoop() {
         status_.message = m;
     };
 
-    Pipeline pipeline(MAKE_SENSOR());
-
-    setMsg("Initialising sensor…");
-    if (!pipeline.initialize()) {
-        setMsg("ERROR: Failed to initialise sensor.");
-        capturing_ = false;
-        return;
-    }
-
-    // Give the Kinect hardware 2 s to stabilise after start — first packets
-    // are often malformed (RgbPacketStreamParser mismatch) and can crash
-    // registration_->apply() if consumed immediately.
-    std::cout << "[CaptureApp] Sensor ready, waiting for hardware stabilisation...\n";
-    std::this_thread::sleep_for(std::chrono::milliseconds(10000));
-    std::cout << "[CaptureApp] Starting capture loop.\n";
+    // Give the Kinect hardware a moment to stabilise after start — first
+    // packets are often malformed and can crash registration_->apply() if
+    // consumed immediately.
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 
     { std::lock_guard<std::mutex> lk(statusMu_); status_.connected = true; }
     setMsg("Preview only — not connected to server.");
@@ -328,33 +403,19 @@ void CaptureApp::previewOnlyLoop() {
     auto fpsStart = std::chrono::steady_clock::now();
     int  fpsCnt   = 0;
     int  frameCnt = 0;
-
-    // Discard first few frames — libfreenect2 may still return unstable data
-    int warmup = 10;
+    int  warmup   = 10; // discard the first few frames — still unstable
 
     while (!stopFlag_) {
         Frame frame;
-        try {
-            std::cout << "[CaptureApp] waiting for frame...\n";
-            if (!pipeline.sensor().captureFrame(frame)) {
-                std::cout << "[CaptureApp] captureFrame returned false\n";
-                continue;
-            }
-        } catch (const std::exception& e) {
-            std::cerr << "[CaptureApp] captureFrame exception: " << e.what() << "\n";
-            break;
-        } catch (...) {
-            std::cerr << "[CaptureApp] captureFrame unknown exception\n";
-            break;
-        }
-        std::cout << "[CaptureApp] got frame, warmup=" << warmup << "\n";
+        if (!pipeline_->sensor().captureFrame(frame)) continue;
         if (warmup > 0) { --warmup; continue; }
+
         updatePreviewBuffers(frame);
 
         fpsCnt++;
         frameCnt++;
 
-        auto now     = std::chrono::steady_clock::now();
+        auto now = std::chrono::steady_clock::now();
         float elapsed = std::chrono::duration<float>(now - fpsStart).count();
         if (elapsed >= 1.0f) {
             float fps = fpsCnt / elapsed;
@@ -368,58 +429,38 @@ void CaptureApp::previewOnlyLoop() {
         }
     }
 
-    pipeline.shutdown();
     std::lock_guard<std::mutex> lk(statusMu_);
     status_.connected = false;
 }
 
 void CaptureApp::captureLoop() {
-    // Snapshot config at thread start
     const std::string host      = config_.host;
     const std::string session   = config_.session;
     const std::string sensorId  = config_.sensorId;
     const bool        useBg     = config_.filterBackground;
-    const bool        useBody   = config_.filterBody;
-
-    Pipeline pipeline(MAKE_SENSOR());
-
-    // Register filters
-    BackgroundSubtractorFilter* bgFilter = nullptr;
-    if (useBg) {
-        auto f = std::make_unique<BackgroundSubtractorFilter>();
-        bgFilter = f.get();
-        pipeline.addFilter(std::move(f));
-    }
-    if (useBody)
-        pipeline.addFilter(std::make_unique<BodyFilter>());
 
     auto setMsg = [&](const std::string& m) {
         std::lock_guard<std::mutex> lk(statusMu_);
         status_.message = m;
     };
 
-    setMsg("Initialising sensor…");
-    if (!pipeline.initialize()) {
-        setMsg("ERROR: Failed to initialise sensor.");
-        capturing_ = false;
-        return;
-    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 
-    // Connect WebSocket
     const std::string wsUrl =
         "ws://" + host + "/ws?session=" + session +
         "&role=producer&sensor=" + sensorId;
-    Sender sender(wsUrl);
+    sender_ = std::make_unique<Sender>(wsUrl);
     setMsg("Connecting to " + wsUrl + "…");
-    if (!sender.connect()) {
+    if (!sender_->connect()) {
         setMsg("ERROR: Connection failed.");
-        pipeline.shutdown();
-        capturing_ = false;
+        sender_.reset();
+        // Self-signal stop: this thread is exiting, but pipeline_ teardown
+        // must happen on the UI thread (see run()'s stopFlag_ poll below).
+        stopFlag_ = true;
         return;
     }
     { std::lock_guard<std::mutex> lk(statusMu_); status_.connected = true; }
 
-    // FPS tracking
     auto fpsStart  = std::chrono::steady_clock::now();
     int  fpsCnt    = 0;
     int  frameCnt  = 0;
@@ -427,18 +468,17 @@ void CaptureApp::captureLoop() {
     setMsg(useBg ? "Learning background — keep scene empty…" : "Streaming.");
 
     while (!stopFlag_) {
-        PointCloud cloud = pipeline.process();
+        PointCloud cloud = pipeline_->process();
         if (cloud.empty()) continue;
 
-        sender.send(cloud);
+        sender_->send(cloud);
 
         if (config_.showPreview)
-            updatePreviewBuffers(pipeline.lastFrame());
+            updatePreviewBuffers(pipeline_->lastFrame());
 
         frameCnt++;
         fpsCnt++;
 
-        // Update status every second
         auto now = std::chrono::steady_clock::now();
         float elapsed = std::chrono::duration<float>(now - fpsStart).count();
         if (elapsed >= 1.0f) {
@@ -446,6 +486,7 @@ void CaptureApp::captureLoop() {
             fpsCnt    = 0;
             fpsStart  = now;
 
+            auto* bgFilter = pipeline_->getFilter<BackgroundSubtractorFilter>();
             float bgProg = bgFilter ? bgFilter->progress() : 1.0f;
             std::string msg = (bgFilter && !bgFilter->isReady())
                 ? "Learning background — keep scene empty…"
@@ -459,9 +500,4 @@ void CaptureApp::captureLoop() {
             status_.message    = msg;
         }
     }
-
-    sender.disconnect();
-    pipeline.shutdown();
-    std::lock_guard<std::mutex> lk(statusMu_);
-    status_.connected = false;
 }

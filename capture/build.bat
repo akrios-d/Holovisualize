@@ -42,25 +42,6 @@ if "!CMAKE_EXE!"=="" (
 )
 echo [+] cmake: !CMAKE_EXE!
 
-:: ── 2. Detect sensor ──────────────────────────────────────────
-set KINECT_V1_FLAG=OFF
-set KINECT_SDK_FLAG=OFF
-
-if /i "%1"=="v1" (
-    set KINECT_V1_FLAG=ON
-    echo [+] Building for Kinect v1 ^(libfreenect^)
-) else if /i "%1"=="lib" (
-    echo [+] Building for Kinect v2 ^(libfreenect2, forced^)
-) else if defined KINECTSDK20_ROOT (
-    set KINECT_SDK_FLAG=ON
-    echo [+] Kinect SDK 2.0 found at !KINECTSDK20_ROOT!
-) else if exist "C:\Program Files\Microsoft SDKs\Kinect\v2.0_1409" (
-    set KINECT_SDK_FLAG=ON
-    echo [+] Kinect SDK 2.0 found at default path
-) else (
-    echo [i] No Kinect SDK found, using libfreenect2
-)
-
 :: ── 3. Clean previous build ───────────────────────────────────
 if exist build (
     echo [+] Cleaning previous build...
@@ -74,8 +55,6 @@ echo [+] Configuring with CMake ...
     -DCMAKE_TOOLCHAIN_FILE="!VCPKG_ROOT!\scripts\buildsystems\vcpkg.cmake" ^
     -DVCPKG_TARGET_TRIPLET=x64-windows ^
     -DCMAKE_PREFIX_PATH="!CD!\vcpkg_installed\x64-windows" ^
-    -DHOLOVISUALIZE_KINECT_V1=!KINECT_V1_FLAG! ^
-    -DHOLOVISUALIZE_KINECT_SDK=!KINECT_SDK_FLAG! ^
     -DHOLOVISUALIZE_OPENCV=OFF
 if errorlevel 1 (
     echo [!] CMake configure failed.

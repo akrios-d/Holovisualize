@@ -10,36 +10,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(HOLOVISUALIZE_OPENCV "Enable OpenCV (background subtraction + ArUco calibration)" ON)
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
-# Use the official Kinect SDK 2.0 instead of libfreenect2 when available/requested.
-# Set -DHOLOVISUALIZE_KINECT_SDK=ON (or OFF to use libfreenect2).
-option(HOLOVISUALIZE_KINECT_SDK "Use official Kinect for Windows SDK 2.0" OFF)
-option(HOLOVISUALIZE_KINECT_V1  "Use Kinect v1 via libfreenect"          OFF)
-if(NOT DEFINED HOLOVISUALIZE_KINECT_SDK AND DEFINED ENV{KINECTSDK20_ROOT})
-    set(HOLOVISUALIZE_KINECT_SDK ON)
-endif()
-
-if(HOLOVISUALIZE_KINECT_V1)
-    set(_freenect_root "C:/libfreenect/install")
-    find_library(FREENECT_LIB freenect PATHS "${_freenect_root}/lib" NO_DEFAULT_PATH REQUIRED)
-    find_path(FREENECT_INCLUDE libfreenect/libfreenect.h PATHS "${_freenect_root}/include" NO_DEFAULT_PATH REQUIRED)
-    message(STATUS "Using libfreenect from ${_freenect_root}")
-elseif(HOLOVISUALIZE_KINECT_SDK)
-    # Resolve SDK root: explicit CMake var > env var > default install path
-    if(DEFINED KINECT_SDK_ROOT)
-        set(_kinect_root "${KINECT_SDK_ROOT}")
-    elseif(DEFINED ENV{KINECTSDK20_ROOT})
-        set(_kinect_root "$ENV{KINECTSDK20_ROOT}")
-    elseif(EXISTS "C:/Program Files/Microsoft SDKs/Kinect/v2.0_1409")
-        set(_kinect_root "C:/Program Files/Microsoft SDKs/Kinect/v2.0_1409")
-    else()
-        message(FATAL_ERROR "HOLOVISUALIZE_KINECT_SDK=ON but could not find the SDK. "
-                            "Pass -DKINECT_SDK_ROOT=<path> or install Kinect for Windows SDK 2.0.")
-    endif()
-    message(STATUS "Using Kinect SDK 2.0 from ${_kinect_root}")
-else()
-    find_package(freenect2 REQUIRED)
-endif()
-
+# Kinect v2 via libfreenect2. The copy fetched by vcpkg's port (v0.2.1)
+# detects GLFW3 via pkg-config, which silently fails on this machine, so it
+# always builds without OpenGL support (CPU-only depth decoding, ~10-12 fps
+# instead of ~60-100). Use our own local build instead, which has OpenGL
+# confirmed working (see C:/libfreenect2/build).
+set(_freenect2_root "C:/libfreenect2")
+set(freenect2_INCLUDE_DIRS "${_freenect2_root}/include" "${_freenect2_root}/build")
+find_library(freenect2_LIBRARIES freenect2
+    PATHS "${_freenect2_root}/build/lib/Release" NO_DEFAULT_PATH REQUIRED)
+set(_freenect2_dll_dir "${_freenect2_root}/build/bin/Release")
+message(STATUS "Using local OpenGL-enabled libfreenect2 from ${_freenect2_root}")
 
 find_package(ixwebsocket REQUIRED)
 find_package(glfw3       REQUIRED)
@@ -54,15 +35,8 @@ endif()
 # ── Sources ───────────────────────────────────────────────────────────────────
 set(CAPTURE_SOURCES
     src/main.cpp
-    src/CaptureApp.cpp)
-
-if(HOLOVISUALIZE_KINECT_V1)
-    list(APPEND CAPTURE_SOURCES src/sensors/KinectV1Sensor.cpp)
-else()
-    list(APPEND CAPTURE_SOURCES src/sensors/KinectV2Sensor.cpp)
-endif()
-
-list(APPEND CAPTURE_SOURCES
+    src/CaptureApp.cpp
+    src/sensors/KinectV2Sensor.cpp
     src/Filter.cpp
     src/Segmentation.cpp
     src/PointCloud.cpp
@@ -83,21 +57,10 @@ add_executable(capture ${CAPTURE_SOURCES})
 target_include_directories(capture PRIVATE include)
 target_compile_definitions(capture PRIVATE
     $<$<BOOL:${HOLOVISUALIZE_OPENCV}>:HOLOVISUALIZE_OPENCV>
-    $<$<BOOL:${HOLOVISUALIZE_KINECT_SDK}>:HOLOVISUALIZE_KINECT_SDK>
-    $<$<BOOL:${HOLOVISUALIZE_KINECT_V1}>:HOLOVISUALIZE_KINECT_V1>
 )
 
-if(HOLOVISUALIZE_KINECT_V1)
-    find_library(LIBUSB_LIB NAMES libusb-1.0 usb-1.0 REQUIRED)
-    target_include_directories(capture PRIVATE "${FREENECT_INCLUDE}")
-    target_link_libraries(capture PRIVATE "${FREENECT_LIB}" "${LIBUSB_LIB}")
-elseif(HOLOVISUALIZE_KINECT_SDK)
-    target_include_directories(capture PRIVATE "${_kinect_root}/inc")
-    target_link_libraries(capture PRIVATE "${_kinect_root}/Lib/x64/Kinect20.lib")
-else()
-    target_include_directories(capture PRIVATE ${freenect2_INCLUDE_DIRS})
-    target_link_libraries(capture PRIVATE ${freenect2_LIBRARIES})
-endif()
+target_include_directories(capture PRIVATE ${freenect2_INCLUDE_DIRS})
+target_link_libraries(capture PRIVATE ${freenect2_LIBRARIES})
 
 target_link_libraries(capture PRIVATE
     ixwebsocket::ixwebsocket
@@ -120,6 +83,19 @@ if(WIN32)
     if(EXISTS "${_vcpkg_bin}")
         file(GLOB _vcpkg_dlls "${_vcpkg_bin}/*.dll")
         foreach(_dll ${_vcpkg_dlls})
+            add_custom_command(TARGET capture POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_dll}" "$<TARGET_FILE_DIR:capture>"
+                COMMENT "Copying ${_dll}")
+        endforeach()
+    endif()
+
+    # Runtime DLLs for the local OpenGL-enabled libfreenect2 build (freenect2,
+    # libusb-1.0, turbojpeg) — not provided by vcpkg since that copy lacks
+    # OpenGL support. See the freenect2 find_library block above.
+    if(_freenect2_dll_dir AND EXISTS "${_freenect2_dll_dir}")
+        file(GLOB _freenect2_dlls "${_freenect2_dll_dir}/*.dll")
+        foreach(_dll ${_freenect2_dlls})
             add_custom_command(TARGET capture POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${_dll}" "$<TARGET_FILE_DIR:capture>"
