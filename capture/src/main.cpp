@@ -73,9 +73,10 @@ int main(int argc, char* argv[]) {
     // Windows deprioritises background/unfocused windows' CPU (and often GPU)
     // scheduling, which starves USB isochronous servicing and GPU depth
     // decode — this looks like packet loss/slowdown but is really the
-    // process just not getting scheduled in time. Request high priority so
-    // capture keeps up even when the window isn't focused.
-    SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+    // process just not getting scheduled in time. ABOVE_NORMAL gives a mild
+    // edge without starving the rest of the system — HIGH_PRIORITY_CLASS was
+    // tried first and made the whole machine stutter/lock up.
+    SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
 #endif
 
     const std::string host     = argc > 1 ? argv[1] : "localhost:8080";

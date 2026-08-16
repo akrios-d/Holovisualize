@@ -194,6 +194,33 @@ from source in CI). Two independent improvements:
 
 Either change cuts the `capture` CI job from ~60 min to ~10 min.
 
+### GPU-accelerated RGB (JPEG) decode
+
+`RgbPacketProcessor` selection in libfreenect2 is independent of the depth
+pipeline choice — every pipeline variant (CPU, OpenGL, OpenCL, CUDA) still
+decodes colour via `getDefaultRgbPacketProcessor()`, which on Windows is
+always `TurboJpegRgbPacketProcessor` (CPU, libjpeg-turbo). There's no
+GPU-decode option built in for Windows (`VaapiRgbPacketProcessor` is
+Linux/VAAPI-only, `TegraJpegRgbPacketProcessor` is Jetson-only).
+
+Measured in this session: `TurboJpegRgbPacketProcessor`'s logged `avg. time`
+times only `tjDecompress2()` itself (wall-clock, packet already fully
+received) — so slow readings (100-800ms vs. a normal ~15-20ms) aren't USB
+data loss, they're this thread getting starved while the GPU-decoded depth
+pipeline and the rest of the app compete for CPU/GPU time in the same
+process. Confirms as CPU contention: RGB-only capture (`Protonect.exe gl
+-nodepth`) holds a steady ~60 fps with nothing else running.
+
+**Plan**: write a custom `RgbPacketProcessor` using NVIDIA's **nvJPEG**
+(CUDA Toolkit, hardware JPEG decode block — separate from the shader cores
+OpenGL depth decode uses, so much less contention than sharing CPU time) and
+wire it into `packet_pipeline.cpp` in the local libfreenect2 checkout
+(`C:/libfreenect2`). Steps: install the CUDA Toolkit, add
+`src/nvjpeg_rgb_packet_processor.cpp` implementing `process()` via nvJPEG,
+copy the decoded frame back from device to host memory (registration and
+point-cloud generation are CPU-side), and add CMake CUDA/nvJPEG detection.
+Not started — real integration work, not a flag to flip.
+
 ## Adding a new sensor
 
 1. Create a class in `include/sensors/` and `src/sensors/` that implements `ISensor`.
