@@ -49,6 +49,8 @@ set KINECT_SDK_FLAG=OFF
 if /i "%1"=="v1" (
     set KINECT_V1_FLAG=ON
     echo [+] Building for Kinect v1 ^(libfreenect^)
+) else if /i "%1"=="lib" (
+    echo [+] Building for Kinect v2 ^(libfreenect2, forced^)
 ) else if defined KINECTSDK20_ROOT (
     set KINECT_SDK_FLAG=ON
     echo [+] Kinect SDK 2.0 found at !KINECTSDK20_ROOT!
@@ -59,7 +61,13 @@ if /i "%1"=="v1" (
     echo [i] No Kinect SDK found, using libfreenect2
 )
 
-:: ── 3. Configure ──────────────────────────────────────────────
+:: ── 3. Clean previous build ───────────────────────────────────
+if exist build (
+    echo [+] Cleaning previous build...
+    rmdir /s /q build
+)
+
+:: ── 4. Configure ──────────────────────────────────────────────
 echo [+] Configuring with CMake ...
 "!CMAKE_EXE!" -B build ^
     -DCMAKE_BUILD_TYPE=Release ^
@@ -74,7 +82,7 @@ if errorlevel 1 (
     goto :abort
 )
 
-:: ── 4. Build ─────────────────────────────────────────────────
+:: ── 5. Build ─────────────────────────────────────────────────
 echo [+] Building ...
 "!CMAKE_EXE!" --build build --config Release --parallel
 if errorlevel 1 (

@@ -5,7 +5,7 @@
 #  define MAKE_SENSOR() std::make_unique<KinectV1Sensor>()
 #else
 #  include "sensors/KinectV2Sensor.h"
-#  define MAKE_SENSOR() MAKE_SENSOR()
+#  define MAKE_SENSOR() std::make_unique<KinectV2Sensor>()
 #endif
 
 #include <imgui.h>
