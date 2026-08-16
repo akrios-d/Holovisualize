@@ -33,6 +33,7 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 class Hub {
 public:
@@ -49,6 +50,11 @@ public:
 
     // ── Timer interface (called from 30fps processing loop) ──────────────────
     void tick(); // process all sessions
+
+    // ── Browser dashboard viewers (WebSocket, not KCP) ────────────────────────
+    void addWsViewer(const std::string& sessionKey, const std::string& id,
+                     std::function<void(const std::vector<uint8_t>&)> sender);
+    void removeWsViewer(const std::string& sessionKey, const std::string& id);
 
     // ── Stats (for dashboard) ────────────────────────────────────────────────
     struct SessionStats {

@@ -186,8 +186,14 @@ void CaptureApp::renderConfigPanel() {
 
     ImGui::Spacing();
     ImGui::SeparatorText("Scene Filters");
-    ImGui::Checkbox("Body bounds filter",     &config_.filterBody);
     ImGui::Checkbox("Background subtraction", &config_.filterBackground);
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Depth Range");
+    ImGui::SliderFloat("Min (mm)", &config_.segmentMinDepthMm, 0.0f, 8000.0f, "%.0f");
+    ImGui::SliderFloat("Max (mm)", &config_.segmentMaxDepthMm, 0.0f, 8000.0f, "%.0f");
+    if (config_.segmentMinDepthMm > config_.segmentMaxDepthMm)
+        config_.segmentMaxDepthMm = config_.segmentMinDepthMm;
 
     ImGui::Spacing();
     ImGui::SeparatorText("Display");
@@ -372,8 +378,6 @@ void CaptureApp::startCapture() {
     pipeline_ = std::make_unique<Pipeline>(MAKE_SENSOR());
     if (config_.filterBackground)
         pipeline_->addFilter(std::make_unique<BackgroundSubtractorFilter>());
-    if (config_.filterBody)
-        pipeline_->addFilter(std::make_unique<BodyFilter>());
 
     {
         std::lock_guard<std::mutex> lk(statusMu_);
@@ -521,22 +525,18 @@ void CaptureApp::captureLoop() {
     int  frameCnt  = 0;
     int  lostCnt   = 0;
 
-    double processMsSum = 0.0;
-    double sendMsSum    = 0.0;
-
     setMsg(useBg ? "Learning background — keep scene empty…" : "Streaming.");
 
     while (!stopFlag_) {
-        auto t0 = std::chrono::steady_clock::now();
+        // Read live so the UI's depth-range sliders take effect without
+        // needing to stop/restart streaming.
+        pipeline_->segmentMinDepthMm = config_.segmentMinDepthMm;
+        pipeline_->segmentMaxDepthMm = config_.segmentMaxDepthMm;
+
         PointCloud cloud = pipeline_->process();
-        auto t1 = std::chrono::steady_clock::now();
         if (cloud.empty()) continue;
 
         sender_->send(cloud);
-        auto t2 = std::chrono::steady_clock::now();
-
-        processMsSum += std::chrono::duration<double, std::milli>(t1 - t0).count();
-        sendMsSum    += std::chrono::duration<double, std::milli>(t2 - t1).count();
 
         if (config_.showPreview)
             updatePreviewBuffers(pipeline_->lastFrame());
@@ -557,9 +557,6 @@ void CaptureApp::captureLoop() {
             std::string msg = (bgFilter && !bgFilter->isReady())
                 ? "Learning background — keep scene empty…"
                 : "Streaming.";
-
-            std::cout << "[Timing] process avg: " << (processMsSum / frameCnt)
-                      << "ms | send avg: " << (sendMsSum / frameCnt) << "ms\n";
 
             std::lock_guard<std::mutex> lk(statusMu_);
             status_.fps        = fps;

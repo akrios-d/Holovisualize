@@ -93,6 +93,17 @@ static void kcpThread(const std::string& serverIp, int serverPort,
     setsockopt(g_udpFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
 
+    // Default OS socket buffers (~64KB) can't absorb a multi-MB point-cloud
+    // mesh frame delivered as a burst of KCP/UDP packets — grow them so
+    // large frames don't just drop wholesale.
+    {
+        int bufSize = 4 * 1024 * 1024;
+        setsockopt(g_udpFd, SOL_SOCKET, SO_RCVBUF,
+                   reinterpret_cast<const char*>(&bufSize), sizeof(bufSize));
+        setsockopt(g_udpFd, SOL_SOCKET, SO_SNDBUF,
+                   reinterpret_cast<const char*>(&bufSize), sizeof(bufSize));
+    }
+
     memset(&g_serverAddr, 0, sizeof(g_serverAddr));
     g_serverAddr.sin_family = AF_INET;
     g_serverAddr.sin_port   = htons(static_cast<uint16_t>(serverPort));
@@ -147,11 +158,16 @@ static void kcpThread(const std::string& serverIp, int serverPort,
     sockaddr_in from{};
     socklen_t fromLen = sizeof(from);
 
+    uint64_t dbgPacketsIn = 0, dbgBytesIn = 0, dbgDecodeFail = 0;
+    auto dbgLast = std::chrono::steady_clock::now();
+
     while (g_running) {
         int n = recvfrom(g_udpFd, recvBuf, sizeof(recvBuf), 0,
                          reinterpret_cast<sockaddr*>(&from), &fromLen);
         if (n > 0) {
             ikcp_input(kcp, recvBuf, n);
+            ++dbgPacketsIn;
+            dbgBytesIn += n;
         }
 
         ikcp_update(kcp, nowMs());
@@ -172,7 +188,18 @@ static void kcpThread(const std::string& serverIp, int serverPort,
                 g_mesh = std::move(m);
                 g_meshDirty = true;
                 ++g_frameCount;
+            } else {
+                ++dbgDecodeFail;
             }
+        }
+
+        auto dbgNow = std::chrono::steady_clock::now();
+        if (dbgNow - dbgLast > std::chrono::seconds(1)) {
+            printf("[preview dbg] udp packets in: %llu (%llu bytes) | waitsnd: %d | decode fail: %llu\n",
+                   (unsigned long long)dbgPacketsIn, (unsigned long long)dbgBytesIn,
+                   ikcp_waitsnd(kcp), (unsigned long long)dbgDecodeFail);
+            dbgPacketsIn = 0; dbgBytesIn = 0;
+            dbgLast = dbgNow;
         }
     }
 
@@ -344,7 +371,8 @@ int main(int argc, char* argv[]) {
     glBindVertexArray(0);
     glEnable(GL_DEPTH_TEST);
 
-    GLsizei g_indexCount = 0;
+    GLsizei g_indexCount  = 0;
+    GLsizei g_vertexCount = 0;
     auto lastStats = std::chrono::steady_clock::now();
     uint64_t lastFrame = 0;
 
@@ -362,7 +390,8 @@ int main(int argc, char* argv[]) {
             glBufferData(GL_ELEMENT_ARRAY_BUFFER,
                          local.indices.size()*sizeof(uint32_t),
                          local.indices.data(), GL_DYNAMIC_DRAW);
-            g_indexCount = (GLsizei)local.indices.size();
+            g_indexCount  = (GLsizei)local.indices.size();
+            g_vertexCount = (GLsizei)local.vertices.size();
         }
 
         int w,h; glfwGetFramebufferSize(window,&w,&h);
@@ -385,8 +414,14 @@ int main(int argc, char* argv[]) {
         glUniformMatrix4fv(uMVP,1,GL_FALSE,mvp.m);
         glUniformMatrix3fv(uNormalMat,1,GL_FALSE,nm);
         glBindVertexArray(vao);
-        if (g_indexCount > 0)
+        if (g_indexCount > 0) {
             glDrawElements(GL_TRIANGLES,g_indexCount,GL_UNSIGNED_INT,nullptr);
+        } else if (g_vertexCount > 0) {
+            // Raw point-cloud frames carry no indices — draw the vertex
+            // buffer directly as points instead.
+            glPointSize(3.0f);
+            glDrawArrays(GL_POINTS, 0, g_vertexCount);
+        }
         glBindVertexArray(0);
 
         // Title bar stats
@@ -396,9 +431,12 @@ int main(int argc, char* argv[]) {
             lastFrame=fc; lastStats=now;
             char title[160];
             snprintf(title,sizeof(title),
-                     "Holovisualize Preview | %s | %llu fps | %d tris",
+                     g_indexCount > 0
+                         ? "Holovisualize Preview | %s | %llu fps | %d tris"
+                         : "Holovisualize Preview | %s | %llu fps | %d pts",
                      g_connected?"connected":"connecting...",
-                     (unsigned long long)fps, g_indexCount/3);
+                     (unsigned long long)fps,
+                     g_indexCount > 0 ? g_indexCount/3 : g_vertexCount);
             glfwSetWindowTitle(window,title);
         }
 

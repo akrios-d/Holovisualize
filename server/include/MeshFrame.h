@@ -28,31 +28,27 @@ inline std::vector<uint8_t> encodeMesh(const Mesh& mesh) {
     const uint32_t ni = static_cast<uint32_t>(mesh.indices.size());
     const uint32_t nTris = ni / 3;
 
-    std::vector<uint8_t> buf;
-    buf.reserve(12 + nv * 24 + nTris * 12);
+    // Sized once up front — repeatedly resize()-ing by 4 bytes at a time
+    // (the previous approach) reallocates on every single field, which is
+    // fine for a few-thousand-vertex marching-cubes mesh but catastrophic
+    // for a raw ~90k-point cloud frame (500k+ reallocations/frame).
+    std::vector<uint8_t> buf(12 + static_cast<size_t>(nv) * 24 + static_cast<size_t>(nTris) * 12);
+    uint8_t* p = buf.data();
 
-    // magic
-    buf.push_back('M'); buf.push_back('E'); buf.push_back('S'); buf.push_back('H');
-
-    // counts
-    auto writeU32 = [&](uint32_t v) {
-        buf.resize(buf.size() + 4);
-        memcpy(buf.data() + buf.size() - 4, &v, 4);
-    };
-    auto writeF32 = [&](float v) {
-        buf.resize(buf.size() + 4);
-        memcpy(buf.data() + buf.size() - 4, &v, 4);
-    };
-
-    writeU32(nv);
-    writeU32(nTris);
+    memcpy(p, "MESH", 4); p += 4;
+    memcpy(p, &nv,    4); p += 4;
+    memcpy(p, &nTris, 4); p += 4;
 
     for (const auto& v : mesh.vertices) {
-        writeF32(v.x);  writeF32(v.y);  writeF32(v.z);
-        writeF32(v.nx); writeF32(v.ny); writeF32(v.nz);
+        memcpy(p, &v.x,  4); p += 4;
+        memcpy(p, &v.y,  4); p += 4;
+        memcpy(p, &v.z,  4); p += 4;
+        memcpy(p, &v.nx, 4); p += 4;
+        memcpy(p, &v.ny, 4); p += 4;
+        memcpy(p, &v.nz, 4); p += 4;
     }
     for (uint32_t idx : mesh.indices) {
-        writeU32(idx);
+        memcpy(p, &idx, 4); p += 4;
     }
     return buf;
 }

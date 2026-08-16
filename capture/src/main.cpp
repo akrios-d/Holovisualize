@@ -11,7 +11,6 @@
 #  include "Calibration.h"
 #  include "filters/BackgroundSubtractorFilter.h"
 #endif
-#include "filters/BodyFilter.h"
 
 #include <ixwebsocket/IXHttpClient.h>
 #include <ixwebsocket/IXNetSystem.h>
@@ -66,7 +65,6 @@ static bool sendCalibration(const std::string& host,
 // Flags:
 //   --calibrate          run ArUco calibration and exit
 //   --headless           stream without UI
-//   --filter=body        body bounding-box filter
 //   --filter=background  background subtraction
 //   --preview            show OpenCV preview (headless only)
 int main(int argc, char* argv[]) {
@@ -88,14 +86,12 @@ int main(int argc, char* argv[]) {
 
     bool calibrateMode   = false;
     bool headlessMode    = false;
-    bool filterBody      = false;
     bool filterBg        = false;
 
     for (int i = 1; i < argc; i++) {
         std::string arg(argv[i]);
         if (arg == "--calibrate")          calibrateMode = true;
         if (arg == "--headless")           headlessMode  = true;
-        if (arg == "--filter=body")        filterBody    = true;
         if (arg == "--filter=background")  filterBg      = true;
     }
 
@@ -130,7 +126,6 @@ int main(int argc, char* argv[]) {
         std::strncpy(cfg.host,     host.c_str(),     sizeof(cfg.host)     - 1);
         std::strncpy(cfg.session,  session.c_str(),  sizeof(cfg.session)  - 1);
         std::strncpy(cfg.sensorId, sensorId.c_str(), sizeof(cfg.sensorId) - 1);
-        cfg.filterBody       = filterBody;
         cfg.filterBackground = filterBg;
 
         CaptureApp app(cfg);
@@ -145,7 +140,6 @@ int main(int argc, char* argv[]) {
 #else
     if (filterBg) std::cerr << "[warn] --filter=background requires OpenCV build; ignored.\n";
 #endif
-    if (filterBody) pipeline.addFilter(std::make_unique<BodyFilter>());
 
     if (!pipeline.initialize()) {
         std::cerr << "Failed to initialise sensor.\n";

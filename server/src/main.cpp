@@ -191,6 +191,29 @@ static const char* kDashboardHtml = R"html(<!DOCTYPE html>
   <div>Voxel resolution <b id="vox-res">—</b></div>
   <div>Uptime <b id="uptime">—</b></div>
 </div>
+<div class="card" style="margin-bottom:16px">
+  <div class="card-header">
+    <h2>Live view</h2>
+    <select id="view-session" style="background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-family:monospace">
+      <option value="">— select session —</option>
+    </select>
+  </div>
+  <canvas id="glcanvas" width="1200" height="480" style="width:100%;height:420px;display:block;background:#000;border-radius:8px;cursor:grab"></canvas>
+  <div id="view-stats" style="margin-top:8px;font-size:.75rem;color:var(--muted);font-family:monospace">not connected</div>
+
+  <div style="margin-top:12px;display:flex;align-items:center;gap:10px;font-family:monospace;font-size:.75rem">
+    <span style="color:var(--muted)">Point size</span>
+    <input id="point-size" type="range" min="1" max="12" step="0.5" value="3" style="flex:1">
+    <span id="point-size-val" style="color:var(--muted);width:24px">3</span>
+  </div>
+
+  <div style="margin-top:14px">
+    <div style="font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">
+      Bound box (visual only — clips this view, doesn't touch the stream)
+    </div>
+    <div id="bounds-controls" style="display:grid;grid-template-columns:16px 1fr 1fr;gap:6px 10px;align-items:center;font-family:monospace;font-size:.75rem"></div>
+  </div>
+</div>
 <div id="sessions" class="sessions">
   <div class="empty">Waiting for sessions...</div>
 </div>
@@ -233,6 +256,7 @@ async function refresh(){
       </div>`;
     }).join('');
     document.getElementById('live').style.background='#22c55e';
+    if(window.__syncSessionPicker) window.__syncSessionPicker(d.sessions.map(s=>s.key), d.ws_port);
   }catch(e){
     document.getElementById('live').style.background='#ef4444';
     document.getElementById('live').textContent='● ERROR';
@@ -240,9 +264,220 @@ async function refresh(){
 }
 setInterval(refresh,1000);
 refresh();
+)html" R"html2(
+
+// ─── Live view — WebGL point-cloud viewer ──────────────────────────────────────
+// Connects as role=viewer over WebSocket (browsers can't do the raw KCP/UDP
+// path capture/preview.exe use) and renders MESH binary frames as points.
+(function(){
+  const canvas = document.getElementById('glcanvas');
+  const statsEl = document.getElementById('view-stats');
+  const picker = document.getElementById('view-session');
+  const gl = canvas.getContext('webgl');
+  if(!gl){ statsEl.textContent='WebGL not available in this browser.'; return; }
+
+  const vsSrc=`
+    attribute vec3 aPos;
+    attribute vec3 aColor;
+    uniform mat4 uMVP;
+    uniform vec3 uBoundsMin;
+    uniform vec3 uBoundsMax;
+    uniform float uPointSize;
+    varying vec3 vColor;
+    void main(){
+      gl_Position = uMVP * vec4(aPos, 1.0);
+      bool inBounds = all(greaterThanEqual(aPos, uBoundsMin)) && all(lessThanEqual(aPos, uBoundsMax));
+      gl_PointSize = inBounds ? uPointSize : 0.0;
+      vColor = aColor;
+    }`;
+  const fsSrc=`
+    precision mediump float;
+    varying vec3 vColor;
+    void main(){ gl_FragColor = vec4(vColor, 1.0); }`;
+
+  function compile(type, src){
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src); gl.compileShader(sh);
+    if(!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(sh));
+    return sh;
+  }
+  const prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vsSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fsSrc));
+  gl.linkProgram(prog);
+  const uMVP = gl.getUniformLocation(prog, 'uMVP');
+  const uBoundsMin = gl.getUniformLocation(prog, 'uBoundsMin');
+  const uBoundsMax = gl.getUniformLocation(prog, 'uBoundsMax');
+  const uPointSize = gl.getUniformLocation(prog, 'uPointSize');
+  const aPos = gl.getAttribLocation(prog, 'aPos');
+  const aColor = gl.getAttribLocation(prog, 'aColor');
+
+  let pointSize = 3.0;
+  const pointSizeInput = document.getElementById('point-size');
+  const pointSizeVal   = document.getElementById('point-size-val');
+  pointSizeInput.addEventListener('input', () => {
+    pointSize = parseFloat(pointSizeInput.value);
+    pointSizeVal.textContent = pointSize.toFixed(1);
+  });
+
+  // Bound box sliders — visual clip only, never sent anywhere.
+  const kBoundsRange = { x: 5, y: 5, z: 10 }; // slider span in metres (± for x/y, 0..z for z)
+  const bounds = { minX:-5, maxX:5, minY:-5, maxY:5, minZ:0, maxZ:10 };
+  (function buildBoundsUI(){
+    const el = document.getElementById('bounds-controls');
+    const axes = [
+      ['X', 'minX', 'maxX', -kBoundsRange.x, kBoundsRange.x],
+      ['Y', 'minY', 'maxY', -kBoundsRange.y, kBoundsRange.y],
+      ['Z', 'minZ', 'maxZ', 0, kBoundsRange.z],
+    ];
+    for (const [label, minKey, maxKey, lo, hi] of axes) {
+      const mk = (key) => {
+        const input = document.createElement('input');
+        input.type = 'range'; input.min = lo; input.max = hi; input.step = 0.05;
+        input.value = bounds[key]; input.style.width = '100%';
+        input.addEventListener('input', () => { bounds[key] = parseFloat(input.value); });
+        return input;
+      };
+      const rowLabel = document.createElement('span');
+      rowLabel.textContent = label; rowLabel.style.color = 'var(--muted)';
+      el.appendChild(rowLabel);
+      el.appendChild(mk(minKey));
+      el.appendChild(mk(maxKey));
+    }
+  })();
+
+  const vbo = gl.createBuffer();
+  const colorVbo = gl.createBuffer();
+  let pointCount = 0;
+
+  // Orbit camera — same controls as preview.exe (drag to orbit, wheel to zoom).
+  let yaw=0, pitch=20, dist=2.5, cx=0, cy=0.8, cz=0;
+  let dragging=false, lastX=0, lastY=0;
+  canvas.addEventListener('mousedown', e=>{dragging=true; lastX=e.clientX; lastY=e.clientY; canvas.style.cursor='grabbing';});
+  window.addEventListener('mouseup', ()=>{dragging=false; canvas.style.cursor='grab';});
+  window.addEventListener('mousemove', e=>{
+    if(!dragging) return;
+    yaw += (e.clientX-lastX)*0.4; pitch += (e.clientY-lastY)*0.4;
+    pitch = Math.max(-89, Math.min(89, pitch));
+    lastX=e.clientX; lastY=e.clientY;
+  });
+  canvas.addEventListener('wheel', e=>{ dist = Math.max(0.3, dist + e.deltaY*0.0015); e.preventDefault(); }, {passive:false});
+
+  function mat4Mul(a,b){
+    const r=new Float32Array(16);
+    for(let c=0;c<4;c++)for(let row=0;row<4;row++){let s=0;for(let k=0;k<4;k++)s+=a[k*4+row]*b[c*4+k];r[c*4+row]=s;}
+    return r;
+  }
+  function perspective(fovy,aspect,zn,zf){
+    const f=1/Math.tan(fovy/2), r=new Float32Array(16);
+    r[0]=f/aspect; r[5]=f; r[10]=(zf+zn)/(zn-zf); r[11]=-1; r[14]=2*zf*zn/(zn-zf);
+    return r;
+  }
+  function lookAt(ex,ey,ez,tx,ty,tz){
+    let fx=tx-ex,fy=ty-ey,fz=tz-ez,fl=Math.hypot(fx,fy,fz); fx/=fl;fy/=fl;fz/=fl;
+    let rx=fy*0-fz*1, ry=fz*0-fx*0, rz=fx*1-fy*0, rl=Math.hypot(rx,ry,rz); rx/=rl;ry/=rl;rz/=rl;
+    let ux=ry*fz-rz*fy, uy=rz*fx-rx*fz, uz=rx*fy-ry*fx;
+    return new Float32Array([rx,ux,-fx,0, ry,uy,-fy,0, rz,uz,-fz,0,
+      -(rx*ex+ry*ey+rz*ez), -(ux*ex+uy*ey+uz*ez), (fx*ex+fy*ey+fz*ez), 1]);
+  }
+
+  function decodeMesh(buf){
+    const dv = new DataView(buf);
+    if(dv.getUint8(0)!==77||dv.getUint8(1)!==69||dv.getUint8(2)!==83||dv.getUint8(3)!==72) return null; // "MESH"
+    const nv = dv.getUint32(4, true);
+    const positions = new Float32Array(nv*3);
+    // Raw point-cloud frames repurpose the "normal" slot (nx,ny,nz) to carry
+    // RGB in 0..1 instead — see SessionModelView::buildFrame().
+    const colors = new Float32Array(nv*3);
+    let o = 12;
+    for(let i=0;i<nv;i++){
+      positions[i*3+0] = dv.getFloat32(o, true);
+      positions[i*3+1] = dv.getFloat32(o+4, true);
+      positions[i*3+2] = dv.getFloat32(o+8, true);
+      colors[i*3+0] = dv.getFloat32(o+12, true);
+      colors[i*3+1] = dv.getFloat32(o+16, true);
+      colors[i*3+2] = dv.getFloat32(o+20, true);
+      o += 24;
+    }
+    return {positions, colors};
+  }
+
+  let ws = null, frameCount=0, lastFrameAt=performance.now(), fps=0;
+
+  function connect(sessionKey){
+    if(ws){ ws.close(); ws=null; }
+    pointCount = 0;
+    if(!sessionKey){ statsEl.textContent='not connected'; return; }
+    const url = `ws://${location.hostname}:${window.__wsPort}/ws?session=${encodeURIComponent(sessionKey)}&role=viewer`;
+    ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+    statsEl.textContent = `connecting to ${sessionKey}...`;
+    ws.onopen = () => { statsEl.textContent = `${sessionKey} — connected, waiting for frames...`; };
+    ws.onclose = () => { statsEl.textContent = `${sessionKey} — disconnected`; };
+    ws.onerror = () => { statsEl.textContent = `${sessionKey} — connection error`; };
+    ws.onmessage = (ev) => {
+      const decoded = decodeMesh(ev.data);
+      if(!decoded) return;
+      pointCount = decoded.positions.length/3;
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.bufferData(gl.ARRAY_BUFFER, decoded.positions, gl.DYNAMIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, colorVbo);
+      gl.bufferData(gl.ARRAY_BUFFER, decoded.colors, gl.DYNAMIC_DRAW);
+      frameCount++;
+      const now = performance.now();
+      if(now - lastFrameAt > 1000){ fps = frameCount*1000/(now-lastFrameAt); frameCount=0; lastFrameAt=now; }
+      statsEl.textContent = `${sessionKey} — ${fps.toFixed(1)} fps — ${pointCount.toLocaleString()} pts`;
+    };
+  }
+
+  picker.addEventListener('change', () => connect(picker.value));
+
+  // Keep the <select> options in sync with live sessions without
+  // clobbering the user's current selection (unlike #sessions, this
+  // element is never blown away by refresh()'s innerHTML rebuild).
+  window.__syncSessionPicker = function(keys, wsPort){
+    window.__wsPort = wsPort;
+    const current = picker.value;
+    const existing = Array.from(picker.options).map(o=>o.value).slice(1);
+    if(existing.length===keys.length && existing.every((k,i)=>k===keys[i])) return;
+    picker.innerHTML = '<option value="">— select session —</option>' +
+      keys.map(k=>`<option value="${k}">${k}</option>`).join('');
+    if(keys.includes(current)) picker.value = current;
+  };
+
+  function render(){
+    requestAnimationFrame(render);
+    gl.viewport(0,0,canvas.width,canvas.height);
+    gl.clearColor(0,0,0,1);
+    gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+    if(pointCount===0) return;
+
+    const yr=yaw*Math.PI/180, pr=pitch*Math.PI/180;
+    const ex=cx+dist*Math.cos(pr)*Math.sin(yr);
+    const ey=cy+dist*Math.sin(pr);
+    const ez=cz+dist*Math.cos(pr)*Math.cos(yr);
+    const proj = perspective(45*Math.PI/180, canvas.width/canvas.height, 0.05, 50);
+    const view = lookAt(ex,ey,ez,cx,cy,cz);
+    const mvp = mat4Mul(proj, view);
+
+    gl.useProgram(prog);
+    gl.uniformMatrix4fv(uMVP, false, mvp);
+    gl.uniform3f(uBoundsMin, bounds.minX, bounds.minY, bounds.minZ);
+    gl.uniform3f(uBoundsMax, bounds.maxX, bounds.maxY, bounds.maxZ);
+    gl.uniform1f(uPointSize, pointSize);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorVbo);
+    gl.enableVertexAttribArray(aColor);
+    gl.vertexAttribPointer(aColor, 3, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.POINTS, 0, pointCount);
+  }
+  render();
+})();
 </script>
 </body>
-</html>)html";
+</html>)html2";
 
 static void startDashboard(Hub& hub, int httpPort) {
     ix::HttpServer httpServer(httpPort, "0.0.0.0");
@@ -289,7 +524,13 @@ static void processingLoop(Hub& hub) {
 
     while (g_running) {
         auto tick = steady_clock::now();
-        hub.tick();
+        try {
+            hub.tick();
+        } catch (const std::exception& e) {
+            std::cerr << "[processingLoop] exception: " << e.what() << "\n";
+        } catch (...) {
+            std::cerr << "[processingLoop] unknown exception\n";
+        }
         auto elapsed = steady_clock::now() - tick;
         if (elapsed < interval)
             std::this_thread::sleep_for(interval - elapsed);
@@ -389,9 +630,13 @@ int main(int argc, char* argv[]) {
     // ── WebSocket server — producers only ─────────────────────────────────────
     // Consumers connect via KCP/UDP (port 8081), not WebSocket.
     ix::WebSocketServer wsServer(wsPort, "0.0.0.0");
+    // Point-cloud/mesh frames are large (~2MB) and mostly-incompressible
+    // float data — permessage-deflate (on by default) burns CPU compressing
+    // it for basically no size win, and was capping broadcast FPS badly.
+    wsServer.disablePerMessageDeflate();
 
     // Cache session/sensor per connection (URI is only available on Open).
-    struct ConnInfo { std::string session; std::string sensor; };
+    struct ConnInfo { std::string session; std::string sensor; bool isViewer = false; };
     std::mutex connMu;
     std::unordered_map<std::string, ConnInfo> connMap;
 
@@ -401,6 +646,8 @@ int main(int argc, char* argv[]) {
                const ix::WebSocketMessagePtr& msg)
     {
         const std::string connId = state->getId();
+
+        try {
 
         // ── Open ────────────────────────────────────────────────────────────
         if (msg->type == ix::WebSocketMessageType::Open) {
@@ -419,13 +666,31 @@ int main(int argc, char* argv[]) {
                 ws.close(4000, "invalid or missing session");
                 return;
             }
+
+            // Browser dashboard viewer — receives MESH frames over this same
+            // WS connection instead of KCP (browsers can't do raw UDP).
+            if (role == "viewer") {
+                { std::lock_guard<std::mutex> lk(connMu);
+                  connMap[connId] = {sessionKey, "", true}; }
+
+                hub.addWsViewer(sessionKey, connId,
+                    [&ws](const std::vector<uint8_t>& frame) {
+                        ws.sendBinary(std::string(
+                            reinterpret_cast<const char*>(frame.data()),
+                            frame.size()));
+                    });
+
+                std::cout << "[" << sessionKey << "] viewer connected\n";
+                return;
+            }
+
             if (!isValidSensorId(sensorId)) {
                 ws.close(4001, "invalid or missing sensor");
                 return;
             }
-            // This server only accepts producers. Consumers use KCP (UDP 8081).
+            // Producers and viewers only. Legacy KCP consumers use UDP 8081.
             if (role != "producer") {
-                ws.close(4002, "consumers must use KCP (UDP port 8081)");
+                ws.close(4002, "use role=viewer, or KCP (UDP port 8081)");
                 return;
             }
 
@@ -439,11 +704,14 @@ int main(int argc, char* argv[]) {
         // ── Message ──────────────────────────────────────────────────────────
         else if (msg->type == ix::WebSocketMessageType::Message) {
             std::string sessionKey, sensorId;
+            bool isViewer = false;
             { std::lock_guard<std::mutex> lk(connMu);
               auto it = connMap.find(connId);
               if (it == connMap.end()) return;
               sessionKey = it->second.session;
-              sensorId   = it->second.sensor; }
+              sensorId   = it->second.sensor;
+              isViewer   = it->second.isViewer; }
+            if (isViewer) return; // viewers are receive-only
             if (!isValidKey(sessionKey) || !isValidSensorId(sensorId)) return;
 
             if (!msg->binary) {
@@ -474,17 +742,32 @@ int main(int argc, char* argv[]) {
         // ── Close ────────────────────────────────────────────────────────────
         else if (msg->type == ix::WebSocketMessageType::Close) {
             std::string sessionKey, sensorId;
+            bool isViewer = false;
             { std::lock_guard<std::mutex> lk(connMu);
               auto it = connMap.find(connId);
               if (it != connMap.end()) {
                   sessionKey = it->second.session;
                   sensorId   = it->second.sensor;
+                  isViewer   = it->second.isViewer;
                   connMap.erase(it);
               }
             }
-            if (!sessionKey.empty())
+            if (sessionKey.empty()) return;
+
+            if (isViewer) {
+                hub.removeWsViewer(sessionKey, connId);
+                std::cout << "[" << sessionKey << "] viewer disconnected\n";
+            } else {
                 std::cout << "[" << sessionKey << "] producer disconnected: "
                           << sensorId << "\n";
+            }
+        }
+
+        } catch (const std::exception& e) {
+            std::cerr << "[ws callback] exception for connId=" << connId
+                      << ": " << e.what() << "\n";
+        } catch (...) {
+            std::cerr << "[ws callback] unknown exception for connId=" << connId << "\n";
         }
     });
 

@@ -16,7 +16,10 @@ PointCloud generatePointCloud(const Frame& frame) {
 
             const float z = d / 1000.0f;                  // mm → meters
             const float x = (u - intr.cx) * z / intr.fx;
-            const float y = (v - intr.cy) * z / intr.fy;
+            // Pixel row v grows downward, but every consumer (server/preview
+            // renderers) expects a Y-up world — flip sign here once instead
+            // of patching every viewer separately.
+            const float y = -(v - intr.cy) * z / intr.fy;
 
             // colorAligned is BGRX — byte order: B=0, G=1, R=2, X=3
             const uint8_t* px = frame.colorAligned.data() + idx * 4;

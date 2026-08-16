@@ -52,7 +52,6 @@ set(CAPTURE_SOURCES
     src/PointCloud.cpp
     src/Pipeline.cpp
     src/Sender.cpp
-    src/filters/BodyFilter.cpp
     src/filters/BackgroundSubtractorFilter.cpp
 )
 

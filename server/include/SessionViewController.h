@@ -27,6 +27,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -47,6 +48,9 @@ public:
                      int udpFd) override;
     void removeConsumer(uint32_t conv) override;
     int      consumerCount() const override;
+    void addWsViewer(const std::string& id,
+                     std::function<void(const std::vector<uint8_t>&)> sender) override;
+    void removeWsViewer(const std::string& id) override;
     uint64_t frameCount()    const override;
     float    outFps()        const override;
 
@@ -75,6 +79,7 @@ private:
 
     mutable std::mutex mu_;
     std::unordered_map<uint32_t, KcpConsumer> consumers_;
+    std::unordered_map<std::string, std::function<void(const std::vector<uint8_t>&)>> wsViewers_;
 
     // FPS tracking
     std::atomic<uint64_t> frameCount_{0};

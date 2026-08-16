@@ -2,7 +2,6 @@
 
 #include "Pipeline.h"
 #include "Sender.h"
-#include "filters/BodyFilter.h"
 #include "filters/BackgroundSubtractorFilter.h"
 
 #include <GL/glew.h>
@@ -24,6 +23,10 @@ struct CaptureConfig {
     bool filterBody       = false;
     bool filterBackground = false;
     bool showPreview      = true;
+
+    // Depth segmentation range (mm) — points outside this are dropped.
+    float segmentMinDepthMm = 200.0f;
+    float segmentMaxDepthMm = 2500.0f;
 };
 
 // ── Live status — updated by the capture thread, read by the UI thread ────────

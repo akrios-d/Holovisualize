@@ -38,6 +38,17 @@ Hub::Hub(int voxelRes) : voxelRes_(voxelRes) {
     setsockopt(udpFd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
 
+    // Default OS socket buffers (~64KB) can't absorb a multi-MB point-cloud
+    // mesh frame delivered as a burst of KCP/UDP packets — grow them so
+    // large frames don't just drop wholesale.
+    {
+        int bufSize = 4 * 1024 * 1024;
+        setsockopt(udpFd_, SOL_SOCKET, SO_RCVBUF,
+                   reinterpret_cast<const char*>(&bufSize), sizeof(bufSize));
+        setsockopt(udpFd_, SOL_SOCKET, SO_SNDBUF,
+                   reinterpret_cast<const char*>(&bufSize), sizeof(bufSize));
+    }
+
     sockaddr_in addr{};
     addr.sin_family      = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
@@ -74,6 +85,20 @@ void Hub::setTransform(const std::string& sessionKey,
                         const std::string& sensorId,
                         const std::array<float, 16>& m) {
     getOrCreate(sessionKey).mv->setTransform(sensorId, m);
+}
+
+// ── Browser dashboard viewers ─────────────────────────────────────────────────
+
+void Hub::addWsViewer(const std::string& sessionKey, const std::string& id,
+                       std::function<void(const std::vector<uint8_t>&)> sender) {
+    // getOrCreate() takes mu_ itself — don't double-lock (non-recursive mutex).
+    getOrCreate(sessionKey).vc->addWsViewer(id, std::move(sender));
+}
+
+void Hub::removeWsViewer(const std::string& sessionKey, const std::string& id) {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto it = sessions_.find(sessionKey);
+    if (it != sessions_.end()) it->second.vc->removeWsViewer(id);
 }
 
 // ── Timer interface ───────────────────────────────────────────────────────────

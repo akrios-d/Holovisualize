@@ -4,6 +4,7 @@
 #include "MeshFrame.h"
 
 #include <chrono>
+#include <cmath>
 
 SessionModelView::SessionModelView(int voxelRes)
     : voxelRes_(voxelRes)
@@ -72,10 +73,38 @@ std::vector<uint8_t> SessionModelView::buildFrame() {
     }
     if (clouds.empty()) return {};
 
-    // 2. Voxelise + Marching Cubes
-    VoxelGrid grid(voxelRes_, voxelRes_, voxelRes_);
-    grid.fill(clouds, transforms);
-    Mesh mesh = marchingCubes(grid, 0.5f);
+    // 2. Point cloud passthrough (Marching Cubes reconstruction disabled for
+    // now — its density normalisation collapses under near-field outliers;
+    // see VoxelGrid::fill()). Transformed points go straight out as loose
+    // vertices, no triangles.
+    Mesh mesh;
+    size_t totalPoints = 0;
+    for (const auto& c : clouds) totalPoints += c.size();
+    mesh.vertices.reserve(totalPoints);
+
+    for (size_t s = 0; s < clouds.size(); ++s) {
+        const auto& m = transforms[s];
+        for (const auto& pt : clouds[s]) {
+            Vertex v{};
+            v.x = m[0]*pt.x + m[1]*pt.y + m[2]*pt.z  + m[3];
+            v.y = m[4]*pt.x + m[5]*pt.y + m[6]*pt.z  + m[7];
+            v.z = m[8]*pt.x + m[9]*pt.y + m[10]*pt.z + m[11];
+            // Raw points have no real normal — repurpose those 3 floats to
+            // carry RGB (0..1) instead, so the wire format doesn't need to
+            // change to add colour.
+            //
+            // Gamma-lift shadows: the Kinect's colour sensor underexposes
+            // anything not front-lit (common with overhead-only room
+            // lighting), so subjects render as near-black silhouettes.
+            // This doesn't fix real exposure, just brightens dark tones for
+            // display without blowing out already-bright ones.
+            constexpr float kShadowGamma = 0.55f;
+            v.nx = std::pow(pt.r / 255.0f, kShadowGamma);
+            v.ny = std::pow(pt.g / 255.0f, kShadowGamma);
+            v.nz = std::pow(pt.b / 255.0f, kShadowGamma);
+            mesh.vertices.push_back(v);
+        }
+    }
     if (mesh.vertices.empty()) return {};
 
     // 3. Gesture detection — run all detectors on the current mesh

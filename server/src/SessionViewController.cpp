@@ -39,7 +39,7 @@ void SessionViewController::tick() {
 
     {
         std::lock_guard<std::mutex> lock(mu_);
-        if (consumers_.empty()) return;
+        if (consumers_.empty() && wsViewers_.empty()) return;
     }
 
     // Build mesh frame via the ISessionView socket (calls SessionModelView).
@@ -64,6 +64,19 @@ void SessionViewController::tick() {
                       << " for conv " << conv << "\n";
         } else {
             c.lastFrameSent = std::chrono::steady_clock::now();
+        }
+    }
+
+    // WS viewers ride over TCP, no KCP fragmentation/ack tracking needed.
+    for (auto& [id, sender] : wsViewers_) {
+        try {
+            sender(frame);
+        } catch (const std::exception& e) {
+            std::cerr << "[" << session_ << "] ws viewer send exception for id="
+                      << id << ": " << e.what() << "\n";
+        } catch (...) {
+            std::cerr << "[" << session_ << "] ws viewer send unknown exception for id="
+                      << id << "\n";
         }
     }
 
@@ -128,7 +141,21 @@ void SessionViewController::removeConsumer(uint32_t conv) {
 
 int SessionViewController::consumerCount() const {
     std::lock_guard<std::mutex> lock(mu_);
-    return static_cast<int>(consumers_.size());
+    return static_cast<int>(consumers_.size() + wsViewers_.size());
+}
+
+void SessionViewController::addWsViewer(
+    const std::string& id,
+    std::function<void(const std::vector<uint8_t>&)> sender) {
+    std::lock_guard<std::mutex> lock(mu_);
+    wsViewers_[id] = std::move(sender);
+    std::cout << "[" << session_ << "] ws viewer added id=" << id << "\n";
+}
+
+void SessionViewController::removeWsViewer(const std::string& id) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (wsViewers_.erase(id))
+        std::cout << "[" << session_ << "] ws viewer removed id=" << id << "\n";
 }
 
 uint64_t SessionViewController::frameCount() const { return frameCount_.load(); }

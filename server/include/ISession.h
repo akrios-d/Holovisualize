@@ -20,6 +20,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -88,6 +89,14 @@ public:
 
     // Number of currently active consumers.
     virtual int consumerCount() const = 0;
+
+    // Register/deregister a browser dashboard viewer — receives the same
+    // MESH binary frame as KCP consumers, but pushed over its WebSocket
+    // connection instead. id must be unique per viewer (e.g. the ws
+    // connection id); sender may be called from the tick() thread.
+    virtual void addWsViewer(const std::string& id,
+                             std::function<void(const std::vector<uint8_t>&)> sender) = 0;
+    virtual void removeWsViewer(const std::string& id) = 0;
 
     // Stats for the dashboard.
     virtual uint64_t frameCount() const = 0;
