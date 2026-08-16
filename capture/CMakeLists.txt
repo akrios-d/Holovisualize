@@ -11,16 +11,26 @@ option(HOLOVISUALIZE_OPENCV "Enable OpenCV (background subtraction + ArUco calib
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
 # Kinect v2 via libfreenect2. The copy fetched by vcpkg's port (v0.2.1)
-# detects GLFW3 via pkg-config, which silently fails on this machine, so it
-# always builds without OpenGL support (CPU-only depth decoding, ~10-12 fps
-# instead of ~60-100). Use our own local build instead, which has OpenGL
-# confirmed working (see C:/libfreenect2/build).
-set(_freenect2_root "C:/libfreenect2")
-set(freenect2_INCLUDE_DIRS "${_freenect2_root}/include" "${_freenect2_root}/build")
-find_library(freenect2_LIBRARIES freenect2
-    PATHS "${_freenect2_root}/build/lib/Release" NO_DEFAULT_PATH REQUIRED)
-set(_freenect2_dll_dir "${_freenect2_root}/build/bin/Release")
-message(STATUS "Using local OpenGL-enabled libfreenect2 from ${_freenect2_root}")
+# detects GLFW3 via pkg-config, which silently fails on Windows, so it always
+# builds without OpenGL support (CPU-only depth decoding, ~10-12 fps instead
+# of ~60-100). If a local OpenGL-enabled build is present (see
+# C:/libfreenect2/build — built from source, GLFW3 found via find_package
+# instead of pkg-config), use that instead. Otherwise fall back to vcpkg's
+# copy with CpuPacketPipeline, so machines/CI without that local build (and
+# without OpenGL depth decode) still compile and run.
+set(_freenect2_local_root "C:/libfreenect2")
+if(EXISTS "${_freenect2_local_root}/build/lib/Release/freenect2.lib")
+    set(freenect2_INCLUDE_DIRS "${_freenect2_local_root}/include" "${_freenect2_local_root}/build")
+    find_library(freenect2_LIBRARIES freenect2
+        PATHS "${_freenect2_local_root}/build/lib/Release" NO_DEFAULT_PATH REQUIRED)
+    set(_freenect2_dll_dir "${_freenect2_local_root}/build/bin/Release")
+    set(HOLOVISUALIZE_FREENECT2_OPENGL ON)
+    message(STATUS "Using local OpenGL-enabled libfreenect2 from ${_freenect2_local_root}")
+else()
+    find_package(freenect2 REQUIRED)
+    set(HOLOVISUALIZE_FREENECT2_OPENGL OFF)
+    message(STATUS "Using vcpkg's libfreenect2 (CPU depth decode — no local OpenGL build found)")
+endif()
 
 find_package(ixwebsocket REQUIRED)
 find_package(glfw3       REQUIRED)
@@ -57,6 +67,7 @@ add_executable(capture ${CAPTURE_SOURCES})
 target_include_directories(capture PRIVATE include)
 target_compile_definitions(capture PRIVATE
     $<$<BOOL:${HOLOVISUALIZE_OPENCV}>:HOLOVISUALIZE_OPENCV>
+    $<$<BOOL:${HOLOVISUALIZE_FREENECT2_OPENGL}>:HOLOVISUALIZE_FREENECT2_OPENGL>
 )
 
 target_include_directories(capture PRIVATE ${freenect2_INCLUDE_DIRS})

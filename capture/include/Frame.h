@@ -28,4 +28,8 @@ struct Frame {
     int colorHeight = 0;
 
     uint64_t timestamp = 0;  // microseconds
+
+    // Depth frames skipped between this frame and the previous one, detected
+    // via the sensor's frame sequence number (0 if unsupported/first frame).
+    int framesLost = 0;
 };

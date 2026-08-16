@@ -32,6 +32,7 @@ struct CaptureStatus {
     float       fps         = 0.0f;
     int         points      = 0;
     int         frameCount  = 0;
+    int         lostTotal   = 0;      // cumulative depth frames lost (sensor-reported)
     float       bgProgress  = 0.0f;   // 0..1 during background learning
     std::string message;              // last info/error line
 };
@@ -69,6 +70,7 @@ private:
     void startCapture();       // "Connect & Stream" — runs on the UI thread
     void startPreviewOnly();   // "Preview Only"      — runs on the UI thread
     void stopCapture();        // runs on the UI thread
+    void testServer();         // "Test Server" — runs on the UI thread, brief blocking
     void captureLoop();        // background thread body (stream mode)
     void previewOnlyLoop();    // background thread body (preview-only mode)
 
@@ -78,6 +80,7 @@ private:
 
     // ── State ─────────────────────────────────────────────────────────────────
     GLFWwindow*  window_  = nullptr;
+    std::string  gpuInfo_;   // GL_RENDERER / GL_VENDOR, filled in initWindow()
 
     CaptureConfig config_;
     CaptureStatus status_;

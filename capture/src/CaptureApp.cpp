@@ -11,6 +11,16 @@
 #include <cstring>
 #include <iostream>
 
+// Hint to hybrid-graphics drivers (NVIDIA Optimus / AMD PowerXpress) to run
+// this process on the discrete GPU instead of the integrated one — without
+// this, Windows may default OpenGL to the Intel iGPU on laptops.
+#if defined(_WIN32)
+extern "C" {
+    __declspec(dllexport) unsigned long NvOptimusEnablement = 0x00000001;
+    __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
 // ── Construction / destruction ────────────────────────────────────────────────
 
 CaptureApp::CaptureApp(CaptureConfig initial) : config_(initial) {}
@@ -45,6 +55,13 @@ bool CaptureApp::initWindow() {
 
     glewExperimental = GL_TRUE;
     if (glewInit() != GLEW_OK) { std::cerr << "[UI] glewInit failed\n"; return false; }
+
+    {
+        const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+        const char* vendor   = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+        gpuInfo_ = std::string(vendor ? vendor : "?") + " — " + (renderer ? renderer : "?");
+        std::cout << "[UI] GPU: " << gpuInfo_ << "\n";
+    }
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -138,12 +155,17 @@ void CaptureApp::renderFrame() {
 
 void CaptureApp::renderConfigPanel() {
     ImGui::Text("Holovisualize Capture");
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", gpuInfo_.c_str());
+    ImGui::PopTextWrapPos();
     ImGui::Spacing();
 
     ImGui::SeparatorText("Connection");
     ImGui::InputText("Host",      config_.host,     sizeof(config_.host));
     ImGui::InputText("Session",   config_.session,  sizeof(config_.session));
     ImGui::InputText("Sensor ID", config_.sensorId, sizeof(config_.sensorId));
+    ImGui::Spacing();
+    if (ImGui::Button("Test Server")) testServer();
 
     ImGui::Spacing();
     ImGui::SeparatorText("Scene Filters");
@@ -186,6 +208,7 @@ void CaptureApp::renderStatusPanel() {
     ImGui::Text("FPS:    %.1f", s.fps);
     ImGui::Text("Points: %d",   s.points);
     ImGui::Text("Frames: %d",   s.frameCount);
+    ImGui::Text("Lost:   %d",   s.lostTotal);
 
     if (!s.message.empty()) {
         ImGui::Spacing();
@@ -403,6 +426,7 @@ void CaptureApp::previewOnlyLoop() {
     auto fpsStart = std::chrono::steady_clock::now();
     int  fpsCnt   = 0;
     int  frameCnt = 0;
+    int  lostCnt  = 0;
     int  warmup   = 10; // discard the first few frames — still unstable
 
     while (!stopFlag_) {
@@ -414,6 +438,7 @@ void CaptureApp::previewOnlyLoop() {
 
         fpsCnt++;
         frameCnt++;
+        lostCnt += frame.framesLost;
 
         auto now = std::chrono::steady_clock::now();
         float elapsed = std::chrono::duration<float>(now - fpsStart).count();
@@ -424,6 +449,7 @@ void CaptureApp::previewOnlyLoop() {
             std::lock_guard<std::mutex> lk(statusMu_);
             status_.fps        = fps;
             status_.frameCount = frameCnt;
+            status_.lostTotal  = lostCnt;
             status_.points     = 0;
             status_.message    = "Preview only — not connected to server.";
         }
@@ -464,6 +490,7 @@ void CaptureApp::captureLoop() {
     auto fpsStart  = std::chrono::steady_clock::now();
     int  fpsCnt    = 0;
     int  frameCnt  = 0;
+    int  lostCnt   = 0;
 
     setMsg(useBg ? "Learning background — keep scene empty…" : "Streaming.");
 
@@ -478,6 +505,7 @@ void CaptureApp::captureLoop() {
 
         frameCnt++;
         fpsCnt++;
+        lostCnt += pipeline_->lastFrame().framesLost;
 
         auto now = std::chrono::steady_clock::now();
         float elapsed = std::chrono::duration<float>(now - fpsStart).count();
@@ -496,8 +524,25 @@ void CaptureApp::captureLoop() {
             status_.fps        = fps;
             status_.points     = static_cast<int>(cloud.size());
             status_.frameCount = frameCnt;
+            status_.lostTotal  = lostCnt;
             status_.bgProgress = bgProg;
             status_.message    = msg;
         }
     }
+}
+
+void CaptureApp::testServer() {
+    const std::string wsUrl = "ws://" + std::string(config_.host) +
+        "/ws?session=" + config_.session + "&role=consumer";
+    {
+        std::lock_guard<std::mutex> lk(statusMu_);
+        status_.message = "Testing " + wsUrl + "…";
+    }
+
+    Sender testSender(wsUrl);
+    bool ok = testSender.connect();
+    testSender.disconnect();
+
+    std::lock_guard<std::mutex> lk(statusMu_);
+    status_.message = ok ? "Server reachable." : "ERROR: Server unreachable.";
 }

@@ -23,7 +23,11 @@ bool KinectV2Sensor::initialize() {
             continue;
         }
 
+#ifdef HOLOVISUALIZE_FREENECT2_OPENGL
         pipeline_ = new libfreenect2::OpenGLPacketPipeline(parentGLContext_);
+#else
+        pipeline_ = new libfreenect2::CpuPacketPipeline();
+#endif
         device_   = freenect2_.openDevice(0, pipeline_);
         if (!device_) {
             std::cerr << "[KinectV2] Could not open device (attempt " << attempt << ").\n";
@@ -69,6 +73,13 @@ bool KinectV2Sensor::captureFrame(Frame& frame) {
     libfreenect2::Frame* rgb   = frames[libfreenect2::Frame::Color];
     libfreenect2::Frame* ir    = frames[libfreenect2::Frame::Ir];
     libfreenect2::Frame* depth = frames[libfreenect2::Frame::Depth];
+
+    if (haveSequence_ && depth->sequence > lastSequence_)
+        frame.framesLost = static_cast<int>(depth->sequence - lastSequence_ - 1);
+    else
+        frame.framesLost = 0;
+    lastSequence_ = depth->sequence;
+    haveSequence_ = true;
 
     libfreenect2::Frame undistorted(512, 424, 4);
     libfreenect2::Frame registered(512, 424, 4);
@@ -116,4 +127,5 @@ void KinectV2Sensor::shutdown() {
     }
     delete listener_;     listener_     = nullptr;
     delete registration_; registration_ = nullptr;
+    haveSequence_ = false;
 }

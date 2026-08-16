@@ -29,4 +29,8 @@ private:
     libfreenect2::PacketPipeline*         pipeline_     = nullptr;
     libfreenect2::SyncMultiFrameListener* listener_     = nullptr;
     libfreenect2::Registration*           registration_ = nullptr;
+
+    // Tracks the depth frame sequence number to detect skipped frames.
+    uint32_t lastSequence_    = 0;
+    bool     haveSequence_    = false;
 };

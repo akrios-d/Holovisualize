@@ -20,6 +20,10 @@
 #include <string>
 #include <sstream>
 
+#if defined(_WIN32)
+#  include <windows.h>
+#endif
+
 #ifdef HOLOVISUALIZE_OPENCV
 // Sends the 4x4 calibration matrix to the server via HTTP POST.
 static bool sendCalibration(const std::string& host,
@@ -65,6 +69,15 @@ static bool sendCalibration(const std::string& host,
 //   --filter=background  background subtraction
 //   --preview            show OpenCV preview (headless only)
 int main(int argc, char* argv[]) {
+#if defined(_WIN32)
+    // Windows deprioritises background/unfocused windows' CPU (and often GPU)
+    // scheduling, which starves USB isochronous servicing and GPU depth
+    // decode — this looks like packet loss/slowdown but is really the
+    // process just not getting scheduled in time. Request high priority so
+    // capture keeps up even when the window isn't focused.
+    SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+#endif
+
     const std::string host     = argc > 1 ? argv[1] : "localhost:8080";
     const std::string session  = argc > 2 ? argv[2] : "demo";
     const std::string sensorId = argc > 3 ? argv[3] : "sensor0";

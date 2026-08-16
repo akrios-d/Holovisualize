@@ -28,7 +28,7 @@ Sender (IXWebSocket client)
 |---|---|
 | CMake ≥ 3.16 | https://cmake.org |
 | vcpkg | https://github.com/microsoft/vcpkg |
-| libfreenect2 | cross-platform Kinect v2 driver |
+| libfreenect2 | cross-platform Kinect v2 driver — see note below |
 | IXWebSocket | WebSocket client |
 | OpenCV 4 + contrib | ArUco marker detection for calibration |
 
@@ -39,13 +39,28 @@ official Kinect SDK driver. Install [Zadig](https://zadig.akeo.ie/), select
 > ⚠️ This makes the official Kinect SDK apps stop working. Reinstall from Device
 > Manager to switch back.
 
+> ⚠️ **libfreenect2 dependency is currently a local machine path, not vcpkg.**
+> The libfreenect2 fetched by vcpkg's port (v0.2.1) detects GLFW3 via
+> pkg-config, which silently fails on Windows, so it always builds without
+> OpenGL support (CPU-only depth decoding, ~10-12 fps instead of ~60-100).
+> `capture/CMakeLists.txt` currently points straight at a locally built,
+> OpenGL-enabled libfreenect2 checkout at `C:/libfreenect2` (built from
+> source, GLFW3 found via `find_package` instead of pkg-config) instead of
+> going through vcpkg. **This means the `capture` CI job in
+> `.github/workflows/ci.yml` will fail** — it runs on a clean runner with no
+> `C:/libfreenect2` — until this is fixed (make the local path optional,
+> fall back to vcpkg's libfreenect2 with `CpuPacketPipeline` when it's not
+> present, and pick the pipeline class via a compile-time flag). Not yet
+> done — see [libfreenect2 setup](../../../../libfreenect2) for how the
+> local build was made.
+
 ## Build
 
 ```bat
 cd capture
 
-# 1. Install dependencies
-C:\vcpkg\vcpkg install libfreenect2 ixwebsocket opencv4[contrib]
+# 1. Install dependencies (libfreenect2 excluded — see note above)
+C:\vcpkg\vcpkg install ixwebsocket opencv4[contrib]
 
 # 2. Configure + build
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
