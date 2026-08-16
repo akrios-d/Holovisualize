@@ -51,7 +51,13 @@ bool CaptureApp::initWindow() {
     if (!window_) { std::cerr << "[UI] glfwCreateWindow failed\n"; return false; }
 
     glfwMakeContextCurrent(window_);
-    glfwSwapInterval(1);
+    // vsync's blocking wait inside glfwSwapBuffers stalls the driver on this
+    // thread, which contends with the independent GL contexts owned by
+    // GLJpegRgbPacketProcessor/OpenGLDepthPacketProcessor (each does its own
+    // wglMakeCurrent) — this showed up as decode throughput collapsing while
+    // the UI window was open, even with the preview panel hidden. Swap
+    // uncapped and pace the loop manually instead (see run()).
+    glfwSwapInterval(0);
 
     glewExperimental = GL_TRUE;
     if (glewInit() != GLEW_OK) { std::cerr << "[UI] glewInit failed\n"; return false; }
@@ -96,7 +102,14 @@ bool CaptureApp::initWindow() {
 void CaptureApp::run() {
     if (!initWindow()) return;
 
+    // UI redraw rate cap (vsync is off — see initWindow()). 30Hz is plenty
+    // for an ImGui status panel and leaves the GPU free for the capture
+    // pipeline's own GL contexts instead of racing them every vblank.
+    const auto frameInterval = std::chrono::milliseconds(1000 / 30);
+
     while (!glfwWindowShouldClose(window_)) {
+        auto frameStart = std::chrono::steady_clock::now();
+
         glfwPollEvents();
 
         // The capture thread self-signals stopFlag_ if it exits on its own
@@ -118,6 +131,10 @@ void CaptureApp::run() {
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window_);
+
+        auto elapsed = std::chrono::steady_clock::now() - frameStart;
+        if (elapsed < frameInterval)
+            std::this_thread::sleep_for(frameInterval - elapsed);
     }
     stopCapture();
 }
@@ -174,7 +191,11 @@ void CaptureApp::renderConfigPanel() {
 
     ImGui::Spacing();
     ImGui::SeparatorText("Display");
+    ImGui::BeginDisabled(streaming_);
     ImGui::Checkbox("Show preview", &config_.showPreview);
+    ImGui::EndDisabled();
+    if (streaming_)
+        ImGui::TextDisabled("Preview disabled while streaming (avoids GPU contention).");
 
     ImGui::Spacing();
     ImGui::Spacing();
@@ -366,8 +387,15 @@ void CaptureApp::startCapture() {
         return;
     }
 
+    // Preview texture uploads add another GL context switch on top of the
+    // packet processors' own — disable it while actually streaming to keep
+    // full decode throughput (see initWindow()'s vsync comment for the rest
+    // of this contention story).
+    config_.showPreview = false;
+
     stopFlag_  = false;
     capturing_ = true;
+    streaming_ = true;
     captureThread_ = std::thread(&CaptureApp::captureLoop, this);
 }
 
@@ -399,6 +427,7 @@ void CaptureApp::stopCapture() {
     stopFlag_ = true;
     if (captureThread_.joinable()) captureThread_.join();
     capturing_ = false;
+    streaming_ = false;
 
     // Runs on the UI thread — matches where the GL-context-owning pipeline
     // was constructed, which OpenGLPacketPipeline's teardown requires.
@@ -492,13 +521,22 @@ void CaptureApp::captureLoop() {
     int  frameCnt  = 0;
     int  lostCnt   = 0;
 
+    double processMsSum = 0.0;
+    double sendMsSum    = 0.0;
+
     setMsg(useBg ? "Learning background — keep scene empty…" : "Streaming.");
 
     while (!stopFlag_) {
+        auto t0 = std::chrono::steady_clock::now();
         PointCloud cloud = pipeline_->process();
+        auto t1 = std::chrono::steady_clock::now();
         if (cloud.empty()) continue;
 
         sender_->send(cloud);
+        auto t2 = std::chrono::steady_clock::now();
+
+        processMsSum += std::chrono::duration<double, std::milli>(t1 - t0).count();
+        sendMsSum    += std::chrono::duration<double, std::milli>(t2 - t1).count();
 
         if (config_.showPreview)
             updatePreviewBuffers(pipeline_->lastFrame());
@@ -520,6 +558,9 @@ void CaptureApp::captureLoop() {
                 ? "Learning background — keep scene empty…"
                 : "Streaming.";
 
+            std::cout << "[Timing] process avg: " << (processMsSum / frameCnt)
+                      << "ms | send avg: " << (sendMsSum / frameCnt) << "ms\n";
+
             std::lock_guard<std::mutex> lk(statusMu_);
             status_.fps        = fps;
             status_.points     = static_cast<int>(cloud.size());
@@ -533,7 +574,8 @@ void CaptureApp::captureLoop() {
 
 void CaptureApp::testServer() {
     const std::string wsUrl = "ws://" + std::string(config_.host) +
-        "/ws?session=" + config_.session + "&role=consumer";
+        "/ws?session=" + config_.session +
+        "&role=producer&sensor=" + config_.sensorId;
     {
         std::lock_guard<std::mutex> lk(statusMu_);
         status_.message = "Testing " + wsUrl + "…";

@@ -53,7 +53,8 @@ jobs:
           cmake -B build `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
-            -DVCPKG_TARGET_TRIPLET=x64-windows
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -DHOLOVISUALIZE_OPENCV=OFF
         shell: pwsh
 
       - name: Build

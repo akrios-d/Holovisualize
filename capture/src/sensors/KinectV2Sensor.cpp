@@ -63,12 +63,19 @@ bool KinectV2Sensor::initialize() {
 }
 
 bool KinectV2Sensor::captureFrame(Frame& frame) {
+    static double waitMsSum = 0, regMsSum = 0, copyMsSum = 0;
+    static int    timingCnt = 0;
+
+    auto tStart = std::chrono::steady_clock::now();
+
     libfreenect2::FrameMap frames;
 
     if (!listener_->waitForNewFrame(frames, 10 * 1000)) {
         std::cerr << "[KinectV2] Timeout waiting for frame.\n";
         return false;
     }
+
+    auto tWait = std::chrono::steady_clock::now();
 
     libfreenect2::Frame* rgb   = frames[libfreenect2::Frame::Color];
     libfreenect2::Frame* ir    = frames[libfreenect2::Frame::Ir];
@@ -84,6 +91,8 @@ bool KinectV2Sensor::captureFrame(Frame& frame) {
     libfreenect2::Frame undistorted(512, 424, 4);
     libfreenect2::Frame registered(512, 424, 4);
     registration_->apply(rgb, depth, &undistorted, &registered);
+
+    auto tReg = std::chrono::steady_clock::now();
 
     const int depthPixels = 512 * 424;
     frame.depth.resize(depthPixels);
@@ -108,7 +117,19 @@ bool KinectV2Sensor::captureFrame(Frame& frame) {
 
     frame.timestamp = depth->timestamp;
 
+    auto tCopy = std::chrono::steady_clock::now();
+
     listener_->release(frames);
+
+    waitMsSum += std::chrono::duration<double, std::milli>(tWait  - tStart).count();
+    regMsSum  += std::chrono::duration<double, std::milli>(tReg   - tWait).count();
+    copyMsSum += std::chrono::duration<double, std::milli>(tCopy  - tReg).count();
+    if (++timingCnt % 30 == 0) {
+        std::cout << "[KinectV2 Timing] wait: " << (waitMsSum / timingCnt)
+                   << "ms | registration: " << (regMsSum / timingCnt)
+                   << "ms | copy: " << (copyMsSum / timingCnt) << "ms\n";
+    }
+
     return true;
 }
 

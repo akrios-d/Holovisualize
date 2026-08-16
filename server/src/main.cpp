@@ -28,6 +28,10 @@
 #include <thread>
 #include <unordered_map>
 
+#if defined(_WIN32)
+#  include <windows.h>
+#endif
+
 // ─── Global state ─────────────────────────────────────────────────────────────
 
 static std::atomic<bool> g_running{true};
@@ -295,6 +299,10 @@ static void processingLoop(Hub& hub) {
 // ─── main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
+#if defined(_WIN32)
+    SetConsoleOutputCP(CP_UTF8);
+#endif
+
     int wsPort   = 8080; // WebSocket — producers only
     int httpPort = 8082; // HTTP dashboard
     int voxelRes = 128;
@@ -494,7 +502,7 @@ int main(int argc, char* argv[]) {
               << "  consumers  →  UDP 0.0.0.0:" << Hub::kKcpPort
               << "  (KCP)\n"
               << "  dashboard  →  http://0.0.0.0:" << httpPort << "/\n"
-              << "  voxel res  →  " << voxelRes << "\xb3\n";
+              << "  voxel res  →  " << voxelRes << "\xc2\xb3\n";
 
     // 30fps processing on a background thread.
     std::thread processor([&hub]{ processingLoop(hub); });

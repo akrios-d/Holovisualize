@@ -14,6 +14,7 @@
 #include "filters/BodyFilter.h"
 
 #include <ixwebsocket/IXHttpClient.h>
+#include <ixwebsocket/IXNetSystem.h>
 
 #include <array>
 #include <iostream>
@@ -78,6 +79,8 @@ int main(int argc, char* argv[]) {
     // tried first and made the whole machine stutter/lock up.
     SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
 #endif
+
+    ix::initNetSystem();
 
     const std::string host     = argc > 1 ? argv[1] : "localhost:8080";
     const std::string session  = argc > 2 ? argv[2] : "demo";

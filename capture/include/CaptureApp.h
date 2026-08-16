@@ -87,6 +87,7 @@ private:
     std::mutex    statusMu_;
 
     bool                capturing_ = false;
+    bool                streaming_ = false;  // true for "Connect & Stream", false for "Preview Only"
     std::thread         captureThread_;
     std::atomic<bool>   stopFlag_{false};
 
