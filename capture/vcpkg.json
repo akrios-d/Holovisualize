@@ -4,15 +4,23 @@
   "dependencies": [
     "libfreenect2",
     "ixwebsocket",
-    {
-      "name": "opencv4",
-      "features": ["contrib"]
-    },
+
     {
       "name": "imgui",
       "features": ["glfw-binding", "opengl3-binding"]
     },
     "glfw3",
     "glew"
-  ]
+  ],
+  "features": {
+    "opencv": {
+      "description": "Enable OpenCV (background subtraction + ArUco calibration)",
+      "dependencies": [
+        {
+          "name": "opencv4",
+          "features": ["contrib"]
+        }
+      ]
+    }
+  }
 }

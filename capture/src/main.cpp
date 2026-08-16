@@ -1,7 +1,16 @@
 #include "CaptureApp.h"
 #include "Pipeline.h"
 #include "Sender.h"
-#include "sensors/KinectV2Sensor.h"
+#ifdef HOLOVISUALIZE_KINECT_V1
+#  include "sensors/KinectV1Sensor.h"
+#  define MAKE_SENSOR() std::make_unique<KinectV1Sensor>()
+#else
+#  include "sensors/KinectV2Sensor.h"
+#  define MAKE_SENSOR() std::make_unique<KinectV2Sensor>()
+#endif
+
+#include <csignal>
+#include <cstdlib>
 
 #ifdef HOLOVISUALIZE_OPENCV
 #  include "Calibration.h"
@@ -11,10 +20,12 @@
 
 #include <ixwebsocket/IXHttpClient.h>
 
+#include <array>
 #include <iostream>
 #include <string>
 #include <sstream>
 
+#ifdef HOLOVISUALIZE_OPENCV
 // Sends the 4x4 calibration matrix to the server via HTTP POST.
 static bool sendCalibration(const std::string& host,
                              const std::string& session,
@@ -44,6 +55,7 @@ static bool sendCalibration(const std::string& host,
     std::cout << "[Calibration] Transform sent.\n";
     return true;
 }
+#endif // HOLOVISUALIZE_OPENCV
 
 // Usage:
 //   capture                                                 — GUI mode (default)
@@ -80,7 +92,7 @@ int main(int argc, char* argv[]) {
 #ifdef HOLOVISUALIZE_OPENCV
         std::cout << "Calibration mode — point sensor at ArUco marker (ID 0, 5 cm).\n";
 
-        Pipeline pipeline(std::make_unique<KinectV2Sensor>());
+        Pipeline pipeline(MAKE_SENSOR());
         if (!pipeline.initialize()) {
             std::cerr << "Failed to initialise sensor.\n";
             return 1;
@@ -115,7 +127,7 @@ int main(int argc, char* argv[]) {
     }
 
     // ── Headless stream mode ──────────────────────────────────────────────────
-    Pipeline pipeline(std::make_unique<KinectV2Sensor>());
+    Pipeline pipeline(MAKE_SENSOR());
 #ifdef HOLOVISUALIZE_OPENCV
     if (filterBg) pipeline.addFilter(std::make_unique<BackgroundSubtractorFilter>());
 #else

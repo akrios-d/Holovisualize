@@ -29,20 +29,54 @@ if not exist "!VCPKG_ROOT!\vcpkg.exe" (
 :found_vcpkg
 echo [+] vcpkg found at !VCPKG_ROOT!
 
-:: ── 2. Configure (vcpkg manifest mode auto-installs deps) ────
+:: ── 1b. Find cmake ────────────────────────────────────────────
+set CMAKE_EXE=
+where cmake >nul 2>&1
+if not errorlevel 1 set CMAKE_EXE=cmake
+if "!CMAKE_EXE!"=="" if exist "%LOCALAPPDATA%\Programs\CLion\bin\cmake\win\x64\bin\cmake.exe" set CMAKE_EXE=%LOCALAPPDATA%\Programs\CLion\bin\cmake\win\x64\bin\cmake.exe
+if "!CMAKE_EXE!"=="" if exist "C:\Program Files\CMake\bin\cmake.exe" set CMAKE_EXE=C:\Program Files\CMake\bin\cmake.exe
+if "!CMAKE_EXE!"=="" if exist "C:\Program Files (x86)\CMake\bin\cmake.exe" set CMAKE_EXE=C:\Program Files (x86)\CMake\bin\cmake.exe
+if "!CMAKE_EXE!"=="" (
+    echo [!] cmake not found. Install CMake or add it to PATH.
+    goto :abort
+)
+echo [+] cmake: !CMAKE_EXE!
+
+:: ── 2. Detect sensor ──────────────────────────────────────────
+set KINECT_V1_FLAG=OFF
+set KINECT_SDK_FLAG=OFF
+
+if /i "%1"=="v1" (
+    set KINECT_V1_FLAG=ON
+    echo [+] Building for Kinect v1 ^(libfreenect^)
+) else if defined KINECTSDK20_ROOT (
+    set KINECT_SDK_FLAG=ON
+    echo [+] Kinect SDK 2.0 found at !KINECTSDK20_ROOT!
+) else if exist "C:\Program Files\Microsoft SDKs\Kinect\v2.0_1409" (
+    set KINECT_SDK_FLAG=ON
+    echo [+] Kinect SDK 2.0 found at default path
+) else (
+    echo [i] No Kinect SDK found, using libfreenect2
+)
+
+:: ── 3. Configure ──────────────────────────────────────────────
 echo [+] Configuring with CMake ...
-cmake -B build ^
+"!CMAKE_EXE!" -B build ^
     -DCMAKE_BUILD_TYPE=Release ^
     -DCMAKE_TOOLCHAIN_FILE="!VCPKG_ROOT!\scripts\buildsystems\vcpkg.cmake" ^
-    -DVCPKG_TARGET_TRIPLET=x64-windows
+    -DVCPKG_TARGET_TRIPLET=x64-windows ^
+    -DCMAKE_PREFIX_PATH="!CD!\vcpkg_installed\x64-windows" ^
+    -DHOLOVISUALIZE_KINECT_V1=!KINECT_V1_FLAG! ^
+    -DHOLOVISUALIZE_KINECT_SDK=!KINECT_SDK_FLAG! ^
+    -DHOLOVISUALIZE_OPENCV=OFF
 if errorlevel 1 (
     echo [!] CMake configure failed.
     goto :abort
 )
 
-:: ── 3. Build ─────────────────────────────────────────────────
+:: ── 4. Build ─────────────────────────────────────────────────
 echo [+] Building ...
-cmake --build build --config Release --parallel
+"!CMAKE_EXE!" --build build --config Release --parallel
 if errorlevel 1 (
     echo [!] Build failed.
     goto :abort

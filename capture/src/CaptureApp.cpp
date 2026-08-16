@@ -1,12 +1,17 @@
 #include "CaptureApp.h"
 #include "PointCloud.h"
-#include "sensors/KinectV2Sensor.h"
+#ifdef HOLOVISUALIZE_KINECT_V1
+#  include "sensors/KinectV1Sensor.h"
+#  define MAKE_SENSOR() std::make_unique<KinectV1Sensor>()
+#else
+#  include "sensors/KinectV2Sensor.h"
+#  define MAKE_SENSOR() MAKE_SENSOR()
+#endif
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
-#include <opencv2/imgproc.hpp>
 
 #include <chrono>
 #include <cstring>
@@ -101,6 +106,7 @@ void CaptureApp::run() {
 
 void CaptureApp::renderFrame() {
     ImGuiIO& io = ImGui::GetIO();
+    if (io.DisplaySize.x <= 0 || io.DisplaySize.y <= 0) return; // first frame not ready
 
     // Left panel — config + status
     ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Always);
@@ -110,25 +116,13 @@ void CaptureApp::renderFrame() {
         ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoScrollbar);
 
     renderConfigPanel();
-    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-    renderStatusPanel();
 
     ImGui::End();
-
-    // Right panel — preview
-    if (config_.showPreview) {
-        ImGui::SetNextWindowPos({380, 0}, ImGuiCond_Always);
-        ImGui::SetNextWindowSize({io.DisplaySize.x - 380, io.DisplaySize.y}, ImGuiCond_Always);
-        ImGui::Begin("Preview", nullptr,
-            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoCollapse);
-        renderPreviewPanel();
-        ImGui::End();
-    }
+    // preview disabled for debug
 }
 
 void CaptureApp::renderConfigPanel() {
-    ImGui::TextColored({0.4f, 0.8f, 1.0f, 1.0f}, "Holovisualize — Capture");
+    ImGui::Text("Holovisualize Capture");
     ImGui::Spacing();
 
     ImGui::SeparatorText("Connection");
@@ -138,13 +132,8 @@ void CaptureApp::renderConfigPanel() {
 
     ImGui::Spacing();
     ImGui::SeparatorText("Scene Filters");
-    ImGui::Checkbox("Body bounds filter",        &config_.filterBody);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Keeps only points inside a human-body\nbounding box (+-0.7m lateral, 0-2.1m height).");
-
-    ImGui::Checkbox("Background subtraction",    &config_.filterBackground);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Captures 30 empty-scene frames on start,\nthen streams only foreground (people/objects).");
+    ImGui::Checkbox("Body bounds filter",     &config_.filterBody);
+    ImGui::Checkbox("Background subtraction", &config_.filterBackground);
 
     ImGui::Spacing();
     ImGui::SeparatorText("Display");
@@ -152,17 +141,11 @@ void CaptureApp::renderConfigPanel() {
 
     ImGui::Spacing();
     ImGui::Spacing();
-
-    bool busy = capturing_;
-    if (busy) ImGui::BeginDisabled();
-    if (ImGui::Button("  Connect & Stream  ", {-1, 40})) startCapture();
+    if (ImGui::Button("Connect & Stream")) startCapture();
     ImGui::Spacing();
-    if (ImGui::Button("  Preview Only (no server)  ", {-1, 32})) startPreviewOnly();
-    if (busy) ImGui::EndDisabled();
-
-    if (!busy) ImGui::BeginDisabled();
-    if (ImGui::Button("  Disconnect  ", {-1, 30})) stopCapture();
-    if (!busy) ImGui::EndDisabled();
+    if (ImGui::Button("Preview Only")) startPreviewOnly();
+    ImGui::Spacing();
+    if (ImGui::Button("Disconnect")) stopCapture();
 }
 
 void CaptureApp::renderStatusPanel() {
@@ -254,18 +237,20 @@ void CaptureApp::updatePreviewBuffers(const Frame& frame) {
         }
     }
 
-    // False-colour depth via OpenCV JET colormap
-    cv::Mat depthF(kDepthH, kDepthW, CV_32FC1,
-                   const_cast<float*>(frame.depth.data()));
-    cv::Mat depth8, heatmap;
-    depthF.convertTo(depth8, CV_8UC1, 255.0 / 2300.0, -200.0 * 255.0 / 2300.0);
-    cv::applyColorMap(depth8, heatmap, cv::COLORMAP_JET);
-
+    // False-colour depth — JET colormap implemented inline (no OpenCV needed).
+    // Maps depth [200 mm .. 2500 mm] → blue(near) .. red(far).
     std::vector<uint8_t> depth(kDepthW * kDepthH * 3);
     for (int i = 0; i < kDepthW * kDepthH; i++) {
-        depth[i * 3 + 0] = heatmap.data[i * 3 + 2]; // R
-        depth[i * 3 + 1] = heatmap.data[i * 3 + 1]; // G
-        depth[i * 3 + 2] = heatmap.data[i * 3 + 0]; // B
+        float d = frame.depth[i];
+        float t = (d <= 0.f) ? 0.f
+                             : std::max(0.f, std::min(1.f, (d - 200.f) / 2100.f));
+        // JET: blue→cyan→green→yellow→red
+        float r = std::min(1.f, std::max(0.f, 1.5f - std::abs(t * 4.f - 3.f)));
+        float g = std::min(1.f, std::max(0.f, 1.5f - std::abs(t * 4.f - 2.f)));
+        float b = std::min(1.f, std::max(0.f, 1.5f - std::abs(t * 4.f - 1.f)));
+        depth[i * 3 + 0] = static_cast<uint8_t>(r * 255);
+        depth[i * 3 + 1] = static_cast<uint8_t>(g * 255);
+        depth[i * 3 + 2] = static_cast<uint8_t>(b * 255);
     }
 
     std::lock_guard<std::mutex> lk(texMu_);
@@ -321,7 +306,7 @@ void CaptureApp::previewOnlyLoop() {
         status_.message = m;
     };
 
-    Pipeline pipeline(std::make_unique<KinectV2Sensor>());
+    Pipeline pipeline(MAKE_SENSOR());
 
     setMsg("Initialising sensor…");
     if (!pipeline.initialize()) {
@@ -329,6 +314,14 @@ void CaptureApp::previewOnlyLoop() {
         capturing_ = false;
         return;
     }
+
+    // Give the Kinect hardware 2 s to stabilise after start — first packets
+    // are often malformed (RgbPacketStreamParser mismatch) and can crash
+    // registration_->apply() if consumed immediately.
+    std::cout << "[CaptureApp] Sensor ready, waiting for hardware stabilisation...\n";
+    std::this_thread::sleep_for(std::chrono::milliseconds(10000));
+    std::cout << "[CaptureApp] Starting capture loop.\n";
+
     { std::lock_guard<std::mutex> lk(statusMu_); status_.connected = true; }
     setMsg("Preview only — not connected to server.");
 
@@ -336,10 +329,26 @@ void CaptureApp::previewOnlyLoop() {
     int  fpsCnt   = 0;
     int  frameCnt = 0;
 
+    // Discard first few frames — libfreenect2 may still return unstable data
+    int warmup = 10;
+
     while (!stopFlag_) {
-        // Capture raw frame directly — skip point cloud generation entirely
         Frame frame;
-        if (!pipeline.sensor().captureFrame(frame)) continue;
+        try {
+            std::cout << "[CaptureApp] waiting for frame...\n";
+            if (!pipeline.sensor().captureFrame(frame)) {
+                std::cout << "[CaptureApp] captureFrame returned false\n";
+                continue;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "[CaptureApp] captureFrame exception: " << e.what() << "\n";
+            break;
+        } catch (...) {
+            std::cerr << "[CaptureApp] captureFrame unknown exception\n";
+            break;
+        }
+        std::cout << "[CaptureApp] got frame, warmup=" << warmup << "\n";
+        if (warmup > 0) { --warmup; continue; }
         updatePreviewBuffers(frame);
 
         fpsCnt++;
@@ -372,7 +381,7 @@ void CaptureApp::captureLoop() {
     const bool        useBg     = config_.filterBackground;
     const bool        useBody   = config_.filterBody;
 
-    Pipeline pipeline(std::make_unique<KinectV2Sensor>());
+    Pipeline pipeline(MAKE_SENSOR());
 
     // Register filters
     BackgroundSubtractorFilter* bgFilter = nullptr;
