@@ -362,6 +362,50 @@ refresh();
     lastX=e.clientX; lastY=e.clientY;
   });
   canvas.addEventListener('wheel', e=>{ dist = Math.max(0.3, dist + e.deltaY*0.0015); e.preventDefault(); }, {passive:false});
+  window.addEventListener('blur', () => { dragging=false; canvas.style.cursor='grab'; });
+
+  // WASD + QE fly movement — moves the orbit centre (cx,cy,cz), mouse still
+  // orbits/zooms around it. Ignored while typing in a text field elsewhere
+  // on the page.
+  const keysDown = new Set();
+  const isTyping = () => {
+    const t = document.activeElement && document.activeElement.tagName;
+    return t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA';
+  };
+  window.addEventListener('keydown', e=>{
+    if(isTyping()) return;
+    const k = e.key.toLowerCase();
+    if('wasdqe'.includes(k)){ keysDown.add(k); e.preventDefault(); }
+  });
+  window.addEventListener('keyup', e=>{ keysDown.delete(e.key.toLowerCase()); });
+  // If the window/tab loses focus while a key is physically held, keyup
+  // never arrives and the key stays "stuck" — the camera keeps drifting on
+  // its own, which also fights with mouse orbiting (the centre keeps
+  // moving mid-drag). Drop everything on blur as a fallback.
+  window.addEventListener('blur', () => keysDown.clear());
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) keysDown.clear();
+  });
+
+  let lastFrameTime = performance.now();
+  function applyFlyMovement(){
+    const now = performance.now();
+    const dt = Math.min((now - lastFrameTime) / 1000, 0.1);
+    lastFrameTime = now;
+    if(keysDown.size === 0) return;
+
+    const speed = 2.0 * dt; // metres/sec
+    const yr = yaw * Math.PI / 180;
+    const fx = -Math.sin(yr), fz = -Math.cos(yr); // forward (where the camera looks)
+    const rx =  Math.cos(yr), rz = -Math.sin(yr); // strafe right (matches lookAt()'s cross(f,up))
+
+    if(keysDown.has('w')){ cx += fx*speed; cz += fz*speed; }
+    if(keysDown.has('s')){ cx -= fx*speed; cz -= fz*speed; }
+    if(keysDown.has('d')){ cx += rx*speed; cz += rz*speed; }
+    if(keysDown.has('a')){ cx -= rx*speed; cz -= rz*speed; }
+    if(keysDown.has('e')){ cy += speed; }
+    if(keysDown.has('q')){ cy -= speed; }
+  }
 
   function mat4Mul(a,b){
     const r=new Float32Array(16);
@@ -447,6 +491,7 @@ refresh();
 
   function render(){
     requestAnimationFrame(render);
+    applyFlyMovement();
     gl.viewport(0,0,canvas.width,canvas.height);
     gl.clearColor(0,0,0,1);
     gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);

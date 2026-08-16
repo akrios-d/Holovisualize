@@ -16,10 +16,14 @@ KinectV2Sensor::~KinectV2Sensor() {
 bool KinectV2Sensor::initialize() {
     shutdown();
 
-    // Debug is libfreenect2's most verbose level (Error < Warning < Info <
-    // Debug) — set explicitly since the default is Info.
+    // Debug was tried and made things measurably worse: it logs on nearly
+    // every USB transfer completion, and that synchronous console I/O
+    // itself was slow enough to delay servicing the next transfer — a
+    // feedback loop where logging caused the packet loss it was showing.
+    // Warning is quieter than the default Info (drops the periodic
+    // "avg. time" stats too) with no such cost.
     libfreenect2::setGlobalLogger(
-        libfreenect2::createConsoleLogger(libfreenect2::Logger::Debug));
+        libfreenect2::createConsoleLogger(libfreenect2::Logger::Warning));
 
     constexpr int kMaxRetries = 3;
     for (int attempt = 1; attempt <= kMaxRetries; ++attempt) {
