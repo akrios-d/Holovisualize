@@ -57,3 +57,13 @@ cmake-build-*/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Runtime state
+holovisualize_config.json
+
+# Personal notes, not project docs
+TUNNEL_SETUP.md
+
+# node
+node_modules/
+dist/

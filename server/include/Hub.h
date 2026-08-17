@@ -64,10 +64,15 @@ public:
         uint64_t frameCount  = 0;
         float    fps         = 0.f;
     };
+    struct BoundBox {
+        float minX=-100, maxX=100, minY=-100, maxY=100, minZ=-100, maxZ=100;
+    };
     struct HubStats {
         int                      wsPort    = 0;
         int                      kcpPort   = 0;
         int                      voxelRes  = 0;
+        float                    pointSize = 0.f;
+        BoundBox                 bounds;
         uint64_t                 uptimeS   = 0;
         std::vector<SessionStats> sessions;
     };
@@ -75,6 +80,17 @@ public:
 
     int totalConsumers() const;
     void setWsPort(int p) { wsPort_ = p; }
+
+    // Point size (metres) that viewers (dashboard, AR) should render with —
+    // server-authoritative so every viewer stays in sync from one setting
+    // instead of each guessing its own.
+    void  setPointSize(float p) { pointSize_ = p; }
+    float pointSize() const { return pointSize_; }
+
+    // Same idea for the visual bound-box clip — server-authoritative, shared
+    // by every viewer of a session.
+    void      setBoundBox(const BoundBox& b) { bounds_ = b; }
+    BoundBox  boundBox() const { return bounds_; }
 
     // UDP socket fd — exposed so SessionViewController::KcpConsumer can use it.
     int udpFd() const { return udpFd_; }
@@ -108,6 +124,8 @@ private:
                             const sockaddr_in& from);
 
     int voxelRes_;
+    float pointSize_ = 0.02f;
+    BoundBox bounds_;
     int wsPort_  = 8080;
     int udpFd_   = -1;
     std::chrono::steady_clock::time_point startTime_{std::chrono::steady_clock::now()};

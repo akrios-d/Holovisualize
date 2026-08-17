@@ -39,20 +39,29 @@ official Kinect SDK driver. Install [Zadig](https://zadig.akeo.ie/), select
 > ⚠️ This makes the official Kinect SDK apps stop working. Reinstall from Device
 > Manager to switch back.
 
-> ⚠️ **libfreenect2 dependency is currently a local machine path, not vcpkg.**
+> ⚠️ **libfreenect2 dependency is a local machine path, not vcpkg — and that
+> local checkout is a fork.**
 > The libfreenect2 fetched by vcpkg's port (v0.2.1) detects GLFW3 via
 > pkg-config, which silently fails on Windows, so it always builds without
 > OpenGL support (CPU-only depth decoding, ~10-12 fps instead of ~60-100).
-> `capture/CMakeLists.txt` currently points straight at a locally built,
-> OpenGL-enabled libfreenect2 checkout at `C:/libfreenect2` (built from
-> source, GLFW3 found via `find_package` instead of pkg-config) instead of
-> going through vcpkg. **This means the `capture` CI job in
-> `.github/workflows/ci.yml` will fail** — it runs on a clean runner with no
-> `C:/libfreenect2` — until this is fixed (make the local path optional,
-> fall back to vcpkg's libfreenect2 with `CpuPacketPipeline` when it's not
-> present, and pick the pipeline class via a compile-time flag). Not yet
-> done — see [libfreenect2 setup](../../../../libfreenect2) for how the
-> local build was made.
+> `capture/CMakeLists.txt` points at a locally built, OpenGL-enabled
+> libfreenect2 checkout at `C:/libfreenect2` (GLFW3 found via `find_package`
+> instead of pkg-config) instead of going through vcpkg.
+>
+> That checkout is
+> [akrios-d/libfreenect2](https://github.com/akrios-d/libfreenect2), a fork
+> of upstream `OpenKinect/libfreenect2`, because it also adds
+> `GLJpegRgbPacketProcessor` — a custom RGB JPEG decoder that does entropy
+> (Huffman) decode on the CPU via libjpeg-turbo's raw-coefficient API and
+> IDCT + chroma upsampling + colour conversion on the GPU via OpenGL
+> fragment shaders, instead of the stock CPU-only `TurboJpegRgbPacketProcessor`
+> every Windows pipeline variant otherwise falls back to (see "GPU-accelerated
+> RGB (JPEG) decode" below). Not yet upstreamed as a PR.
+>
+> CI (`.github/workflows/ci.yml`) doesn't have `C:/libfreenect2` on the
+> runner, so `capture/CMakeLists.txt` falls back to vcpkg's libfreenect2
+> (`CpuPacketPipeline`, no GPU decode) when the local path isn't present —
+> the CI build still passes, just without the fork's speedup.
 
 ## Build
 
@@ -91,29 +100,35 @@ capture.exe localhost:8080 demo sensor0
 capture.exe 192.168.1.10:8080 demo sensor0
 ```
 
-### Scene filters
+> Running `capture.exe` with no `--headless`/`--calibrate` flag opens an
+> ImGui GUI instead (`CaptureApp`) — host/session/sensor fields, a depth-range
+> slider (min/max mm, live-adjustable while streaming), a background-
+> subtraction checkbox, a 4-panel preview (Color/Depth/IR/Registered), and
+> Connect & Stream / Preview Only / Disconnect / Test Server buttons. That's
+> the normal way to run it day-to-day; the CLI flags below are for headless/
+> scripted use.
 
-Pass one filter flag to control what gets streamed:
+### Scene filters
 
 | Flag | Description |
 |---|---|
 | _(none)_ | Stream everything the sensor captures |
-| `--filter=body` | Keep only points inside a human-body bounding box (±0.7 m lateral, 0–2.1 m height) |
 | `--filter=background` | Capture 30 background frames on startup, then stream only foreground (moving objects / people) |
 
 ```bat
-# Body only
-capture.exe localhost:8080 demo sensor0 --filter=body
-
-# Background subtraction
-capture.exe localhost:8080 demo sensor0 --filter=background
-
-# Both — body bounds applied after background subtraction
-capture.exe localhost:8080 demo sensor0 --filter=background --filter=body
+# Background subtraction, headless
+capture.exe localhost:8080 demo sensor0 --headless --filter=background
 ```
 
 > `--filter=background` requires ~1 second of empty-scene frames on startup.
 > Keep the area clear until "Background model ready." appears in the console.
+>
+> There used to be a `--filter=body` (fixed spatial bounding-box crop) too —
+> removed. A fixed box in one sensor's local, uncalibrated space is a poor
+> proxy for "just the subject"; that kind of spatial crop belongs after
+> multi-sensor fusion instead. It's now a visual-only bound-box clip on the
+> viewer side (dashboard's Live view / the AR `viewer/` app), driven by
+> server-side settings under `/api/config` — see `server/README.md`.
 
 ### Preview mode
 
@@ -152,13 +167,16 @@ transform.
 
 ## Pipeline settings
 
-Edit these in `src/main.cpp` before the capture loop:
+`Pipeline::segmentMinDepthMm`/`segmentMaxDepthMm` (default 200–2500mm) are
+the GUI's "Depth Range" sliders — live-adjustable while streaming, no
+rebuild needed (`CaptureApp::captureLoop()` writes them into the pipeline
+every frame). `filterEnabled`/`filterThresholdMm` (flying-pixels filter)
+aren't exposed in the UI yet — still edit those in `src/main.cpp`/
+`CaptureApp.cpp` before building:
 
 ```cpp
 pipeline.filterEnabled      = true;   // flying-pixels filter
 pipeline.filterThresholdMm  = 20.0f;  // depth discontinuity threshold
-pipeline.segmentMinDepthMm  = 200.0f;
-pipeline.segmentMaxDepthMm  = 2500.0f;
 ```
 
 ## Wire format (HOLO)
@@ -211,15 +229,37 @@ pipeline and the rest of the app compete for CPU/GPU time in the same
 process. Confirms as CPU contention: RGB-only capture (`Protonect.exe gl
 -nodepth`) holds a steady ~60 fps with nothing else running.
 
-**Plan**: write a custom `RgbPacketProcessor` using NVIDIA's **nvJPEG**
-(CUDA Toolkit, hardware JPEG decode block — separate from the shader cores
-OpenGL depth decode uses, so much less contention than sharing CPU time) and
-wire it into `packet_pipeline.cpp` in the local libfreenect2 checkout
-(`C:/libfreenect2`). Steps: install the CUDA Toolkit, add
-`src/nvjpeg_rgb_packet_processor.cpp` implementing `process()` via nvJPEG,
-copy the decoded frame back from device to host memory (registration and
-point-cloud generation are CPU-side), and add CMake CUDA/nvJPEG detection.
-Not started — real integration work, not a flag to flip.
+**nvJPEG (NVIDIA CUDA hardware JPEG decode) — tried, abandoned.** A custom
+`NvJpegRgbPacketProcessor` was implemented and wired into
+`packet_pipeline.cpp`, but every nvJPEG decode API (one-shot, pipelined, and
+combined) fails on this machine's RTX 50-series + CUDA 13.3 combination —
+confirmed environmental (not Kinect-specific) via a standalone non-Kinect
+JPEG repro. The code is still in the fork
+([akrios-d/libfreenect2](https://github.com/akrios-d/libfreenect2)) behind
+`ENABLE_NVJPEG` (default `OFF`) in case a future driver/CUDA update fixes it,
+but it's not the active path.
+
+**What's actually running: `GLJpegRgbPacketProcessor`.** Entropy (Huffman)
+decode is inherently serial, so it stays on the CPU via libjpeg-turbo's raw
+coefficient API (`jpeg_read_coefficients()` — distinct from the simplified
+`tjDecompress2()` TurboJPEG wrapper); it exposes the raw quantized DCT
+coefficient blocks before IDCT. IDCT, chroma upsampling, and YCbCr→RGB
+colour conversion — the parallelisable part — run on the GPU as OpenGL
+fragment shader passes (`src/shader/jpeg_idct.fs`,
+`src/shader/jpeg_color.fs`), the same GPGPU pattern libfreenect2's own depth
+pipeline already uses (`sampler2DRect` textures, FBO + fullscreen-quad
+passes). Enabled by default (`ENABLE_GLJPEG`), tried first in
+`getDefaultRgbPacketProcessor()`, with `TurboJpegRgbPacketProcessor` as the
+fallback if `good()` fails.
+
+Caveat found in this session: decode throughput alone is fine (~100Hz
+isolated), but running inside `capture.exe` with its own window open — even
+with the preview panel hidden — showed real contention between this
+decoder's independent GL context and the UI window's `glfwSwapBuffers`
+vsync wait (fixed on the `capture` side by disabling vsync and capping the
+UI redraw loop manually — see `capture/src/CaptureApp.cpp`). Running
+headless (`capture.exe --headless`, no window at all) doesn't hit this at
+all.
 
 ## Adding a new sensor
 

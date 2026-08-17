@@ -119,9 +119,11 @@ int Hub::totalConsumers() const {
 
 Hub::HubStats Hub::getStats() const {
     HubStats stats;
-    stats.wsPort   = wsPort_;
-    stats.kcpPort  = kKcpPort;
-    stats.voxelRes = voxelRes_;
+    stats.wsPort    = wsPort_;
+    stats.kcpPort   = kKcpPort;
+    stats.voxelRes  = voxelRes_;
+    stats.pointSize = pointSize_;
+    stats.bounds    = bounds_;
     stats.uptimeS  = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now() - startTime_).count());

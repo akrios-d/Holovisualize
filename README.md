@@ -22,10 +22,10 @@ Marching Cubes, and any connected viewer renders it live.
 
 ```
 Holovisualize/
-├── capture/     C++  — sensor capture, pipeline, WebSocket sender
-├── server/      C++  — relay server, Marching Cubes, mesh broadcast
+├── capture/     C++  — sensor capture, pipeline, WebSocket sender (fork: see capture/README.md)
+├── server/      C++  — relay server, dashboard + live view, KCP/WS broadcast
 ├── preview/     C++  — local OpenGL preview window (like LiveScan3D)
-└── viewer/      JS   — Three.js web viewer (in progress)
+└── viewer/      JS   — Three.js phone AR viewer (camera + orientation, tap to place)
 ```
 
 Each sub-project has its own README with full build + usage instructions.
@@ -110,22 +110,32 @@ mesh at ~30 fps.
 
 ### 5. Connect a viewer
 
-**Local preview (optional — for diagnostics):**
+There are three ways to view a session — same MESH binary frame either way,
+different transport:
+
+**Dashboard (built into the server, easiest):** open
+`http://SERVER:8082/`, pick the session from the "Live view" dropdown.
+WebGL point-cloud viewer with orbit camera, WASD fly movement, and
+point-size/bound-box controls — no separate build needed, it's served
+directly by `server.exe`.
+
+**Native preview (`preview.exe`, KCP/UDP — for diagnostics):**
 ```bash
 cd preview
 vcpkg install ixwebsocket glfw3
 cmake -B build ...
-./build/preview "ws://SERVER:8080/ws?session=demo&role=consumer"
+./build/preview SERVER 8081 demo
 ```
 
-**Web viewer:**
-```
-ws://SERVER:8080/ws?session=demo&role=consumer
-```
-Receives MESH binary frames — see `server/README.md` for the wire format.
+**Phone AR (`viewer/`, WebSocket):** see `viewer/README.md` — camera feed +
+device-orientation "AR" (no WebXR, works on iOS Safari too), connects with
+`?host=SERVER:8080&session=demo`.
 
-**Unity:** Connect a WebSocket client to the same URL and decode the MESH frame
-to build a `Mesh` component in real-time.
+**Unity / custom clients:** connect over WebSocket with
+`role=viewer`: `ws://SERVER:8080/ws?session=demo&role=viewer`, decode the
+MESH binary frame to build a `Mesh` in real-time. (KCP/UDP is also available
+for lower-overhead native clients — see `server/README.md` for both wire
+protocols.)
 
 ---
 
@@ -172,3 +182,10 @@ Offset            Size       Type    Description
 12 + v*24         4×6        f32 LE  Vertex[v]: x,y,z,nx,ny,nz
 12+nVerts*24+t*12 4×3        u32 LE  Triangle[t]: i0,i1,i2
 ```
+
+Marching Cubes reconstruction is currently disabled by default (density
+normalisation collapses under near-field outlier splats — see
+`server/README.md`); `nTris` is `0` and points stream through as loose
+vertices instead. In that mode `nx,ny,nz` carry RGB (0..1 each) instead of a
+real normal, since raw points don't have one and the wire format didn't need
+to change to add colour — see `SessionModelView::buildFrame()`.

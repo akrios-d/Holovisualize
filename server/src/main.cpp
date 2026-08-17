@@ -18,8 +18,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <csignal>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
@@ -101,6 +103,67 @@ static bool parseCalibration(const std::string& text,
     return idx == 16;
 }
 
+// Extract a numeric field from a flat JSON object body — no JSON library
+// linked, so this is deliberately minimal (matches parseCalibration above).
+// Leaves `out` untouched and returns false if the key isn't present/valid.
+static bool getJsonFloat(const std::string& text, const std::string& key, float& out) {
+    auto kpos = text.find("\"" + key + "\"");
+    if (kpos == std::string::npos) return false;
+    auto cpos = text.find(':', kpos);
+    if (cpos == std::string::npos) return false;
+
+    size_t start = cpos + 1;
+    while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start]))) start++;
+    size_t end = start;
+    while (end < text.size() &&
+           (std::isdigit(static_cast<unsigned char>(text[end])) ||
+            text[end] == '-' || text[end] == '.' || text[end] == 'e' || text[end] == 'E' || text[end] == '+'))
+        end++;
+    if (end == start) return false;
+
+    try {
+        float v = std::stof(text.substr(start, end - start));
+        if (std::isnan(v) || std::isinf(v)) return false;
+        out = v;
+        return true;
+    } catch (...) { return false; }
+}
+
+// ─── Display config persistence (point size, bound box) ───────────────────────
+// Survives restarts so the sender doesn't have to re-tune the AR/dashboard
+// view every time server.exe is relaunched.
+
+static const char* kConfigPath = "holovisualize_config.json";
+
+static void saveConfig(const Hub& hub) {
+    const auto b = hub.boundBox();
+    std::ofstream f(kConfigPath, std::ios::trunc);
+    if (!f) return;
+    f << std::fixed << std::setprecision(4)
+      << "{\"pointSize\":" << hub.pointSize()
+      << ",\"minX\":" << b.minX << ",\"maxX\":" << b.maxX
+      << ",\"minY\":" << b.minY << ",\"maxY\":" << b.maxY
+      << ",\"minZ\":" << b.minZ << ",\"maxZ\":" << b.maxZ << "}";
+}
+
+static void loadConfig(Hub& hub) {
+    std::ifstream f(kConfigPath);
+    if (!f) return;
+    std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+
+    float v;
+    if (getJsonFloat(text, "pointSize", v) && v > 0.001f && v < 1.0f)
+        hub.setPointSize(v);
+
+    Hub::BoundBox b = hub.boundBox();
+    getJsonFloat(text, "minX", b.minX); getJsonFloat(text, "maxX", b.maxX);
+    getJsonFloat(text, "minY", b.minY); getJsonFloat(text, "maxY", b.maxY);
+    getJsonFloat(text, "minZ", b.minZ); getJsonFloat(text, "maxZ", b.maxZ);
+    hub.setBoundBox(b);
+
+    std::cout << "[main] loaded display config from " << kConfigPath << "\n";
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 static std::string buildStatusJson(const Hub& hub) {
@@ -110,6 +173,12 @@ static std::string buildStatusJson(const Hub& hub) {
     j << R"({"ws_port":)"  << s.wsPort
       << R"(,"kcp_port":)" << s.kcpPort
       << R"(,"voxel_res":)"<< s.voxelRes
+      << std::setprecision(3)
+      << R"(,"point_size":)" << s.pointSize
+      << R"(,"bounds":{"minX":)" << s.bounds.minX << R"(,"maxX":)" << s.bounds.maxX
+      << R"(,"minY":)" << s.bounds.minY << R"(,"maxY":)" << s.bounds.maxY
+      << R"(,"minZ":)" << s.bounds.minZ << R"(,"maxZ":)" << s.bounds.maxZ << "}"
+      << std::setprecision(1)
       << R"(,"uptime_s":)" << s.uptimeS
       << R"(,"sessions":[)";
     for (size_t i = 0; i < s.sessions.size(); ++i) {
@@ -203,8 +272,8 @@ static const char* kDashboardHtml = R"html(<!DOCTYPE html>
 
   <div style="margin-top:12px;display:flex;align-items:center;gap:10px;font-family:monospace;font-size:.75rem">
     <span style="color:var(--muted)">Point size</span>
-    <input id="point-size" type="range" min="1" max="12" step="0.5" value="3" style="flex:1">
-    <span id="point-size-val" style="color:var(--muted);width:24px">3</span>
+    <input id="point-size" type="range" min="0.005" max="0.08" step="0.001" value="0.02" style="flex:1">
+    <span id="point-size-val" style="color:var(--muted);width:40px">0.020</span>
   </div>
 
   <div style="margin-top:14px">
@@ -282,12 +351,13 @@ refresh();
     uniform mat4 uMVP;
     uniform vec3 uBoundsMin;
     uniform vec3 uBoundsMax;
-    uniform float uPointSize;
+    uniform float uPointSize; // world-space (metres) — matches the AR viewer
+    uniform float uFocalPx;   // canvas.height/2 * projection[5]
     varying vec3 vColor;
     void main(){
       gl_Position = uMVP * vec4(aPos, 1.0);
       bool inBounds = all(greaterThanEqual(aPos, uBoundsMin)) && all(lessThanEqual(aPos, uBoundsMax));
-      gl_PointSize = inBounds ? uPointSize : 0.0;
+      gl_PointSize = inBounds ? (uPointSize * uFocalPx / gl_Position.w) : 0.0;
       vColor = aColor;
     }`;
   const fsSrc=`
@@ -309,33 +379,54 @@ refresh();
   const uBoundsMin = gl.getUniformLocation(prog, 'uBoundsMin');
   const uBoundsMax = gl.getUniformLocation(prog, 'uBoundsMax');
   const uPointSize = gl.getUniformLocation(prog, 'uPointSize');
+  const uFocalPx = gl.getUniformLocation(prog, 'uFocalPx');
   const aPos = gl.getAttribLocation(prog, 'aPos');
   const aColor = gl.getAttribLocation(prog, 'aColor');
 
-  let pointSize = 3.0;
+  // Point size + bound box are server-authoritative (see Hub::pointSize_/
+  // bounds_) — every viewer (this dashboard, the AR page) reads the same
+  // values from /api/status, and this UI writes back via POST /api/config,
+  // instead of each viewer keeping its own local-only setting.
+  let pointSize = 0.02;
+  const bounds = { minX:-100, maxX:100, minY:-100, maxY:100, minZ:-100, maxZ:100 };
+
   const pointSizeInput = document.getElementById('point-size');
   const pointSizeVal   = document.getElementById('point-size-val');
+
+  let pushTimer = null;
+  function pushConfig(){
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => {
+      fetch('/api/config', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ pointSize, ...bounds }),
+      }).catch(()=>{});
+    }, 150);
+  }
+
   pointSizeInput.addEventListener('input', () => {
     pointSize = parseFloat(pointSizeInput.value);
-    pointSizeVal.textContent = pointSize.toFixed(1);
+    pointSizeVal.textContent = pointSize.toFixed(3);
+    pushConfig();
   });
 
-  // Bound box sliders — visual clip only, never sent anywhere.
-  const kBoundsRange = { x: 5, y: 5, z: 10 }; // slider span in metres (± for x/y, 0..z for z)
-  const bounds = { minX:-5, maxX:5, minY:-5, maxY:5, minZ:0, maxZ:10 };
+  const boundsInputs = {};
   (function buildBoundsUI(){
     const el = document.getElementById('bounds-controls');
+    const kRange = { x: 5, y: 5, z: 10 }; // slider span in metres
     const axes = [
-      ['X', 'minX', 'maxX', -kBoundsRange.x, kBoundsRange.x],
-      ['Y', 'minY', 'maxY', -kBoundsRange.y, kBoundsRange.y],
-      ['Z', 'minZ', 'maxZ', 0, kBoundsRange.z],
+      ['X', 'minX', 'maxX', -kRange.x, kRange.x],
+      ['Y', 'minY', 'maxY', -kRange.y, kRange.y],
+      ['Z', 'minZ', 'maxZ', -kRange.z, kRange.z],
     ];
     for (const [label, minKey, maxKey, lo, hi] of axes) {
       const mk = (key) => {
         const input = document.createElement('input');
         input.type = 'range'; input.min = lo; input.max = hi; input.step = 0.05;
-        input.value = bounds[key]; input.style.width = '100%';
-        input.addEventListener('input', () => { bounds[key] = parseFloat(input.value); });
+        input.value = Math.max(lo, Math.min(hi, bounds[key])); input.style.width = '100%';
+        input.addEventListener('input', () => { bounds[key] = parseFloat(input.value); pushConfig(); });
+        boundsInputs[key] = input;
         return input;
       };
       const rowLabel = document.createElement('span');
@@ -345,6 +436,20 @@ refresh();
       el.appendChild(mk(maxKey));
     }
   })();
+
+  // Pull the server's current values once at load, so this UI reflects
+  // whatever another viewer (or a previous session) last set.
+  fetch('/api/status').then(r=>r.json()).then(d=>{
+    if(typeof d.point_size === 'number'){
+      pointSize = d.point_size;
+      pointSizeInput.value = pointSize;
+      pointSizeVal.textContent = pointSize.toFixed(3);
+    }
+    if(d.bounds){
+      Object.assign(bounds, d.bounds);
+      for(const k in boundsInputs) boundsInputs[k].value = bounds[k];
+    }
+  }).catch(()=>{});
 
   const vbo = gl.createBuffer();
   const colorVbo = gl.createBuffer();
@@ -510,6 +615,7 @@ refresh();
     gl.uniform3f(uBoundsMin, bounds.minX, bounds.minY, bounds.minZ);
     gl.uniform3f(uBoundsMax, bounds.maxX, bounds.maxY, bounds.maxZ);
     gl.uniform1f(uPointSize, pointSize);
+    gl.uniform1f(uFocalPx, canvas.height * 0.5 * proj[5]);
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
     gl.enableVertexAttribArray(aPos);
     gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
@@ -537,6 +643,27 @@ static void startDashboard(Hub& hub, int httpPort) {
         if (req->uri == "/api/status" || req->uri.rfind("/api/status?", 0) == 0) {
             resp->headers["Content-Type"]  = "application/json";
             resp->headers["Cache-Control"] = "no-store";
+            // Read-only aggregate stats, no session-specific secrets — safe to
+            // expose cross-origin so the Vercel-hosted AR viewer can fetch it.
+            resp->headers["Access-Control-Allow-Origin"] = "*";
+            resp->body = buildStatusJson(hub);
+        } else if (req->uri == "/api/config" && req->method == "POST") {
+            // Server-authoritative display settings (point size, bound-box
+            // clip) — set once from the dashboard, read by every viewer
+            // (dashboard's own Live view, the AR page) so they stay in sync.
+            float v;
+            if (getJsonFloat(req->body, "pointSize", v) && v > 0.001f && v < 1.0f)
+                hub.setPointSize(v);
+
+            Hub::BoundBox b = hub.boundBox();
+            getJsonFloat(req->body, "minX", b.minX); getJsonFloat(req->body, "maxX", b.maxX);
+            getJsonFloat(req->body, "minY", b.minY); getJsonFloat(req->body, "maxY", b.maxY);
+            getJsonFloat(req->body, "minZ", b.minZ); getJsonFloat(req->body, "maxZ", b.maxZ);
+            hub.setBoundBox(b);
+            saveConfig(hub);
+
+            resp->headers["Content-Type"] = "application/json";
+            resp->headers["Access-Control-Allow-Origin"] = "*";
             resp->body = buildStatusJson(hub);
         } else {
             // All other paths serve the dashboard HTML.
@@ -602,6 +729,7 @@ int main(int argc, char* argv[]) {
     // Hub owns the UDP/KCP consumer socket (port 8081) and session registry.
     Hub hub(voxelRes);
     hub.setWsPort(wsPort);
+    loadConfig(hub);
 
     // ── Register gesture effects (Socket Pattern) ─────────────────────────────
     // Each factory is called when a new GestureEvent of that type fires.
