@@ -1,4 +1,5 @@
-#include "CaptureApp.h"
+#include "CaptureModelView.h"
+#include "CaptureViewController.h"
 #include "Pipeline.h"
 #include "Sender.h"
 #include "sensors/KinectV2Sensor.h"
@@ -128,8 +129,9 @@ int main(int argc, char* argv[]) {
         std::strncpy(cfg.sensorId, sensorId.c_str(), sizeof(cfg.sensorId) - 1);
         cfg.filterBackground = filterBg;
 
-        CaptureApp app(cfg);
-        app.run();
+        CaptureModelView model;
+        CaptureViewController controller(model, model, cfg);
+        controller.run();
         return 0;
     }
 

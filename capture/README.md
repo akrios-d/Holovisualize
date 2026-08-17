@@ -109,12 +109,19 @@ capture.exe 192.168.1.10:8080 demo sensor0
 ```
 
 > Running `capture.exe` with no `--headless`/`--calibrate` flag opens an
-> ImGui GUI instead (`CaptureApp`) — host/session/sensor fields, a depth-range
-> slider (min/max mm, live-adjustable while streaming), a background-
-> subtraction checkbox, a 4-panel preview (Color/Depth/IR/Registered), and
-> Connect & Stream / Preview Only / Disconnect / Test Server buttons. That's
-> the normal way to run it day-to-day; the CLI flags below are for headless/
+> ImGui GUI instead — host/session/sensor fields, a depth-range slider
+> (min/max mm, live-adjustable while streaming), a background-subtraction
+> checkbox, a 4-panel preview (Color/Depth/IR/Registered), and Connect &
+> Stream / Preview Only / Disconnect / Test Server buttons. That's the
+> normal way to run it day-to-day; the CLI flags below are for headless/
 > scripted use.
+>
+> The GUI follows the Socket Pattern (see `server/include/ISession.h` for
+> the original C++ adaptation this mirrors): `ICaptureApp.h` declares
+> `ICaptureModel`/`ICaptureView`/`ICaptureController`, `CaptureModelView`
+> owns the pipeline/sensor/network side, `CaptureViewController` owns the
+> GLFW window/ImGui/preview textures side. Neither knows the other's
+> concrete type — only the three interfaces.
 
 ### Scene filters
 
@@ -177,10 +184,11 @@ transform.
 
 `Pipeline::segmentMinDepthMm`/`segmentMaxDepthMm` (default 200–2500mm) are
 the GUI's "Depth Range" sliders — live-adjustable while streaming, no
-rebuild needed (`CaptureApp::captureLoop()` writes them into the pipeline
-every frame). `filterEnabled`/`filterThresholdMm` (flying-pixels filter)
+rebuild needed (the slider's `onDepthRangeChanged()` calls straight into
+`CaptureModelView::setDepthRange()`, which writes into the pipeline
+directly). `filterEnabled`/`filterThresholdMm` (flying-pixels filter)
 aren't exposed in the UI yet — still edit those in `src/main.cpp`/
-`CaptureApp.cpp` before building:
+`CaptureModelView.cpp` before building:
 
 ```cpp
 pipeline.filterEnabled      = true;   // flying-pixels filter
@@ -265,9 +273,9 @@ isolated), but running inside `capture.exe` with its own window open — even
 with the preview panel hidden — showed real contention between this
 decoder's independent GL context and the UI window's `glfwSwapBuffers`
 vsync wait (fixed on the `capture` side by disabling vsync and capping the
-UI redraw loop manually — see `capture/src/CaptureApp.cpp`). Running
-headless (`capture.exe --headless`, no window at all) doesn't hit this at
-all.
+UI redraw loop manually — see `capture/src/CaptureViewController.cpp`).
+Running headless (`capture.exe --headless`, no window at all) doesn't hit
+this at all.
 
 ## Adding a new sensor
 

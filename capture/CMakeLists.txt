@@ -45,7 +45,8 @@ endif()
 # ── Sources ───────────────────────────────────────────────────────────────────
 set(CAPTURE_SOURCES
     src/main.cpp
-    src/CaptureApp.cpp
+    src/CaptureModelView.cpp
+    src/CaptureViewController.cpp
     src/sensors/KinectV2Sensor.cpp
     src/Filter.cpp
     src/Segmentation.cpp
