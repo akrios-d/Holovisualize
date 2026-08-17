@@ -163,8 +163,34 @@ size sliders).
 | ISO level | 0.5 | Isosurface threshold, only used if Marching Cubes is re-enabled. `SessionModelView::buildFrame()`. |
 | Gaussian splat radius | 2 voxels | Same — `VoxelGrid::fill()`. |
 
-## Replacing the Go server
+## Gesture / effects system
 
-The old Go server files (`go.mod`, `go.sum`, `main.go`, `internal/`, `hub/`)
-are still present in this folder but unused. They can be deleted once the C++
-server is confirmed working.
+`IGestureDetector` (`include/IGestureDetector.h`), `GestureType`/`GestureEvent`
+(`include/GestureEvent.h`), and `EffectGenerator` + the concrete effects
+under `include/effects/` (fire, lightning, shockwave, explosion, vortex,
+ice spikes, black hole, spawned procedural shapes — sphere/cube/crystal/
+torus/star, or an arbitrary `.obj` mesh) are all implemented and wired up
+via `hub.onSessionCreated()` in `main.cpp`, which maps each `GestureType` to
+an effect factory.
+
+**No `IGestureDetector` is actually registered anywhere.** The interface,
+the event type, and every effect it could trigger all exist and work — but
+`SessionModelView::addGestureDetector()` is never called, so
+`SessionModelView::buildFrame()`'s gesture-detection step
+(`for (auto& det : detectors_) ...`) always iterates an empty list. Every
+`registerEffect(GestureType::X, ...)` call in `main.cpp` is currently dead
+wiring until a detector that can actually emit that `GestureType` exists.
+
+**No joint/skeletal data is available to detect gestures from.**
+`libfreenect2` (see `capture/README.md`) is a raw-stream driver only — depth,
+IR, colour, and depth↔colour registration, not Microsoft's proprietary body-
+tracking algorithm (that only ships in the official, Windows-only, closed-
+source Kinect for Windows SDK, which this project deliberately dropped in
+favour of libfreenect2's cross-platform raw access — see git history,
+"drop Kinect SDK/v1"). A future `IGestureDetector` has to work from the
+merged `Mesh`/point cloud's raw geometry (bounding-box extent, centroid
+position/velocity, point density) — there's no hand/finger/joint
+segmentation to build on. `IGestureDetector.h`'s doc comment shows a minimal
+working example this way (`ArmsRaised` via mesh centroid Y height) — that
+class of gesture (whole-body pose, not fine hand shape) is what's realistic
+without joint data.

@@ -36,6 +36,14 @@ Sender (IXWebSocket client)
 official Kinect SDK driver. Install [Zadig](https://zadig.akeo.ie/), select
 **KinectSensor**, choose **WinUSB**, click Install Driver.
 
+> ⚠️ **No joint/skeletal tracking.** This is the trade-off for dropping the
+> official Kinect SDK (see git history, "drop Kinect SDK/v1") in favour of
+> libfreenect2: raw depth/IR/colour streams and depth↔colour registration
+> only, none of Microsoft's proprietary body-tracking algorithm. Anything
+> that wants gesture/pose recognition (see "Gesture / effects system" in
+> `server/README.md`) has to work from the point cloud's raw geometry —
+> there's no hand/finger/joint data to build on.
+
 > ⚠️ This makes the official Kinect SDK apps stop working. Reinstall from Device
 > Manager to switch back.
 
