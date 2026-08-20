@@ -33,6 +33,7 @@ struct CaptureConfig {
 
     bool filterBackground = false;
     bool showPreview      = true;
+    bool enableGestures   = true;  // detect hand gestures via the MediaPipe sidecar
 
     // Depth segmentation range (mm) — points outside this are dropped.
     float segmentMinDepthMm = 200.0f;
@@ -48,6 +49,11 @@ struct CaptureStatus {
     int         lostTotal   = 0;      // cumulative depth frames lost (sensor-reported)
     float       bgProgress  = 0.0f;   // 0..1 during background learning
     std::string message;              // last info/error line
+
+    // Name of the most recently recognised hand gesture (e.g. "Fist"),
+    // empty if none has fired yet this session. Persists until the next one
+    // — see CaptureModelView::detectAndSendGesture().
+    std::string lastGesture;
 };
 
 // RGB preview buffers at the depth resolution (512x424) — produced by the

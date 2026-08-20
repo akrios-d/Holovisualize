@@ -8,6 +8,20 @@
 #include <chrono>
 #include <thread>
 
+namespace {
+const char* gestureName(HandGesture g) {
+    switch (g) {
+        case HandGesture::Fist:        return "Fist";
+        case HandGesture::OpenHand:    return "Open Hand";
+        case HandGesture::Pinch:       return "Pinch";
+        case HandGesture::ThumbsUp:    return "Thumbs Up";
+        case HandGesture::PointFinger: return "Point Finger";
+        case HandGesture::Peace:       return "Peace";
+        default:                       return "None";
+    }
+}
+} // namespace
+
 CaptureModelView::~CaptureModelView() {
     stopCapture();
 }
@@ -156,6 +170,14 @@ void CaptureModelView::previewOnlyLoop() {
 
         updatePreviewBuffers(frame);
 
+        if (activeConfig_.enableGestures) {
+            if (++gestureFrameSkip_ >= 4) {
+                gestureFrameSkip_ = 0;
+                HandDetection det;
+                runGestureDetection(frame, det); // status_.lastGesture only — no server, nothing to send
+            }
+        }
+
         fpsCnt++;
         frameCnt++;
         lostCnt += frame.framesLost;
@@ -224,6 +246,16 @@ void CaptureModelView::captureLoop() {
 
         sender_->send(cloud);
 
+        if (activeConfig_.enableGestures) {
+            // MediaPipe inference is far slower than depth capture — only
+            // sample every few frames (~8-10Hz at 30fps capture) so the
+            // sidecar round-trip never becomes the bottleneck.
+            if (++gestureFrameSkip_ >= 4) {
+                gestureFrameSkip_ = 0;
+                detectAndSendGesture(pipeline_->lastFrame());
+            }
+        }
+
         frameCnt++;
         fpsCnt++;
         lostCnt += pipeline_->lastFrame().framesLost;
@@ -250,6 +282,73 @@ void CaptureModelView::captureLoop() {
             status_.message    = msg;
         }
     }
+}
+
+// ── Gesture detection ──────────────────────────────────────────────────────────
+
+// Round-trips one frame through the sidecar and updates status_.lastGesture.
+// Returns true (with `det` filled) on an edge-triggered gesture change —
+// i.e. the same held gesture only returns true once, not every call — so
+// callers that go on to spawn a server-side effect don't spam it every
+// ~100ms (EffectGenerator::onGestures spawns unconditionally per event).
+// Split out from detectAndSendGesture() so previewOnlyLoop() can exercise
+// the capture<->sidecar round trip without needing a live server connection
+// — useful for isolating sidecar/network issues from the streaming path.
+bool CaptureModelView::runGestureDetection(const Frame& frame, HandDetection& det) {
+    const auto& intr = frame.depthIntrinsics;
+    const int   w    = intr.width;
+    const int   h    = intr.height;
+    const size_t expected = static_cast<size_t>(w) * h;
+    if (frame.colorAligned.size() < expected * 4 || frame.depth.size() < expected)
+        return false;
+
+    // colorAligned is BGRX (see PointCloud.cpp) — the sidecar wants plain RGB.
+    std::vector<uint8_t> rgb(expected * 3);
+    for (size_t i = 0; i < expected; i++) {
+        rgb[i * 3 + 0] = frame.colorAligned[i * 4 + 2]; // R
+        rgb[i * 3 + 1] = frame.colorAligned[i * 4 + 1]; // G
+        rgb[i * 3 + 2] = frame.colorAligned[i * 4 + 0]; // B
+    }
+
+    if (!gestureClient_.detect(rgb.data(), w, h, det)) {
+        lastSentGesture_ = HandGesture::None; // hand lost — re-arm edge trigger
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(statusMu_);
+        status_.lastGesture = gestureName(det.gesture);
+    }
+
+    if (det.gesture == lastSentGesture_) return false;
+    lastSentGesture_ = det.gesture;
+    return true;
+}
+
+void CaptureModelView::detectAndSendGesture(const Frame& frame) {
+    HandDetection det;
+    if (!runGestureDetection(frame, det)) return;
+
+    const auto& intr = frame.depthIntrinsics;
+    const int   w    = intr.width;
+    const int   h    = intr.height;
+
+    // Look up real depth at the wrist landmark and project to camera space —
+    // same formula as generatePointCloud() (including the Y-up flip), so
+    // the position lands in the same space as the point cloud it's mixed
+    // with server-side.
+    int u = static_cast<int>(det.wristU * w);
+    int v = static_cast<int>(det.wristV * h);
+    u = std::clamp(u, 0, w - 1);
+    v = std::clamp(v, 0, h - 1);
+    const float d = frame.depth[static_cast<size_t>(v) * w + u];
+    if (d <= 0.f) return; // no depth at that pixel — skip rather than send garbage
+
+    const float z = d / 1000.0f;
+    const float x = (u - intr.cx) * z / intr.fx;
+    const float y = -(v - intr.cy) * z / intr.fy;
+
+    sender_->sendGesture(det.gesture, x, y, z, det.confidence);
 }
 
 // ── Preview textures ──────────────────────────────────────────────────────────

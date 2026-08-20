@@ -93,6 +93,28 @@ inline std::vector<EffectPoint> makeTorus(
     return pts;
 }
 
+// Heart — parametric 2D heart curve, extruded to a thin 3D shell.
+// x(t) = 16 sin³t, y(t) = 13 cos t - 5 cos 2t - 2 cos 3t - cos 4t (classic
+// "heart curve"), scaled to unit size and given a little Z-thickness so it
+// reads as a point-cloud volume rather than a flat outline.
+inline std::vector<EffectPoint> makeHeart(
+        std::array<float,3> centre, float size, int n,
+        std::array<uint8_t,3> col) {
+    std::vector<EffectPoint> pts;
+    pts.reserve(n);
+    constexpr float kNorm = 1.f / 16.f; // normalises x(t)'s amplitude to ~[-1,1]
+    for (int i = 0; i < n; i++) {
+        float t = frand(0.f, static_cast<float>(2*M_PI));
+        float x = 16.f * std::pow(std::sin(t), 3.f);
+        float y = 13.f*std::cos(t) - 5.f*std::cos(2*t) - 2.f*std::cos(3*t) - std::cos(4*t);
+        float z = frand(-0.15f, 0.15f);
+        pts.push_back({{ centre[0] + x*kNorm*size,
+                         centre[1] + y*kNorm*size,
+                         centre[2] + z*size }, col});
+    }
+    return pts;
+}
+
 // Star / burst — rays emanating from centre
 inline std::vector<EffectPoint> makeStar(
         std::array<float,3> centre, float innerR, float outerR,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PointCloud.h"
+#include "GestureWire.h"
 #include <ixwebsocket/IXWebSocket.h>
 #include <string>
 #include <vector>
@@ -28,6 +29,11 @@ public:
     // Serialises `cloud` and sends it as a binary frame.
     // Returns false if not connected or send fails.
     bool send(const PointCloud& cloud);
+
+    // Sends a GEVT gesture event frame (see GestureWire.h). x/y/z are
+    // camera-space metres — the server transforms to world space using this
+    // sensor's calibration.
+    bool sendGesture(HandGesture type, float x, float y, float z, float confidence);
 
 private:
     static std::vector<uint8_t> serialise(const PointCloud& cloud);

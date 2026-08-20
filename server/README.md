@@ -173,24 +173,42 @@ torus/star, or an arbitrary `.obj` mesh) are all implemented and wired up
 via `hub.onSessionCreated()` in `main.cpp`, which maps each `GestureType` to
 an effect factory.
 
-**No `IGestureDetector` is actually registered anywhere.** The interface,
-the event type, and every effect it could trigger all exist and work — but
+**No mesh-based `IGestureDetector` is registered.** The interface, the event
+type, and every effect it could trigger all exist and work — but
 `SessionModelView::addGestureDetector()` is never called, so
-`SessionModelView::buildFrame()`'s gesture-detection step
-(`for (auto& det : detectors_) ...`) always iterates an empty list. Every
-`registerEffect(GestureType::X, ...)` call in `main.cpp` is currently dead
-wiring until a detector that can actually emit that `GestureType` exists.
+`SessionModelView::buildFrame()`'s mesh-detector step
+(`for (auto& det : detectors_) ...`) always iterates an empty list.
+`IGestureDetector.h`'s doc comment shows what a working one would look like
+(`ArmsRaised` via mesh centroid Y height) — this is the right approach for
+whole-body pose from raw geometry (no joint/skeletal data is available;
+`libfreenect2` is a raw-stream driver only — depth, IR, colour, registration,
+not Microsoft's proprietary body-tracking algorithm, see `capture/README.md`).
+Nobody has needed a mesh-based gesture yet since hand gestures are covered
+below.
 
-**No joint/skeletal data is available to detect gestures from.**
-`libfreenect2` (see `capture/README.md`) is a raw-stream driver only — depth,
-IR, colour, and depth↔colour registration, not Microsoft's proprietary body-
-tracking algorithm (that only ships in the official, Windows-only, closed-
-source Kinect for Windows SDK, which this project deliberately dropped in
-favour of libfreenect2's cross-platform raw access — see git history,
-"drop Kinect SDK/v1"). A future `IGestureDetector` has to work from the
-merged `Mesh`/point cloud's raw geometry (bounding-box extent, centroid
-position/velocity, point density) — there's no hand/finger/joint
-segmentation to build on. `IGestureDetector.h`'s doc comment shows a minimal
-working example this way (`ArmsRaised` via mesh centroid Y height) — that
-class of gesture (whole-body pose, not fine hand shape) is what's realistic
-without joint data.
+**Hand gestures are fed in externally, not detected server-side.**
+`capture/`'s [gesture sidecar](../capture/gesture_sidecar/) runs MediaPipe
+Hands and classifies static poses (fist, open hand, thumbs up, peace, point,
+pinch) from the RGB frame — something the server can't do from point-cloud
+geometry alone. The capture client sends recognised gestures as `GEVT`
+binary frames over the same WebSocket connection as `HOLO` point clouds;
+`ISessionModel::pushGestureEvent()` (implemented in `SessionModelView`)
+transforms the camera-space position to world space using that sensor's
+calibration and merges it into the same event batch mesh detectors would
+feed, right before `EffectGenerator::onGestures()`. So every
+`registerEffect(GestureType::X, ...)` mapping in `main.cpp` for a
+hand-gesture `GestureType` (`Fist`, `OpenHand`, `Pinch`, `ThumbsUp`,
+`PointFinger`, `Peace`) is live — the others (motion/two-hand/full-body
+types) stay dead wiring until a detector exists that can emit them.
+
+Wire format — `GEVT` (little-endian), see `capture/include/GestureWire.h`
+(encoder) / `decodeGestureEvent()` in `server/src/main.cpp` (decoder):
+```
+[4]  magic       = "GEVT"
+[1]  gestureType (u8, GestureType)
+[3]  padding
+[4]  x (f32, camera-space metres)
+[4]  y
+[4]  z
+[4]  confidence  (f32, 0..1)
+```

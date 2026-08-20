@@ -26,6 +26,7 @@ public:
     void updateCloud(const std::string& sensorId, PointCloud cloud) override;
     void setTransform(const std::string& sensorId,
                       const std::array<float, 16>& m) override;
+    void pushGestureEvent(const std::string& sensorId, GestureEvent ev) override;
 
     // ── ISessionView (the socket) ─────────────────────────────────────────────
     std::vector<uint8_t> buildFrame() override;
@@ -60,4 +61,10 @@ private:
     // Gesture + effects pipeline
     std::vector<std::unique_ptr<IGestureDetector>> detectors_;
     EffectGenerator effects_;
+
+    // Gesture events pushed from outside the mesh-detector pipeline (e.g.
+    // capture's MediaPipe sidecar via pushGestureEvent()) — already
+    // transformed to world space, drained into buildFrame()'s event batch
+    // on the next tick.
+    std::vector<GestureEvent> externalEvents_;
 };

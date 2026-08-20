@@ -67,3 +67,9 @@ TUNNEL_SETUP.md
 # node
 node_modules/
 dist/
+
+# python (gesture sidecar)
+.venv/
+__pycache__/
+*.pyc
+capture/gesture_sidecar/gesture_recognizer.task

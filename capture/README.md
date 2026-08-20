@@ -36,13 +36,17 @@ Sender (IXWebSocket client)
 official Kinect SDK driver. Install [Zadig](https://zadig.akeo.ie/), select
 **KinectSensor**, choose **WinUSB**, click Install Driver.
 
-> ⚠️ **No joint/skeletal tracking.** This is the trade-off for dropping the
-> official Kinect SDK (see git history, "drop Kinect SDK/v1") in favour of
-> libfreenect2: raw depth/IR/colour streams and depth↔colour registration
-> only, none of Microsoft's proprietary body-tracking algorithm. Anything
-> that wants gesture/pose recognition (see "Gesture / effects system" in
-> `server/README.md`) has to work from the point cloud's raw geometry —
-> there's no hand/finger/joint data to build on.
+> ⚠️ **No joint/skeletal tracking from libfreenect2 itself.** This is the
+> trade-off for dropping the official Kinect SDK (see git history, "drop
+> Kinect SDK/v1") in favour of libfreenect2: raw depth/IR/colour streams and
+> depth↔colour registration only, none of Microsoft's proprietary
+> body-tracking algorithm.
+>
+> Hand gesture recognition is implemented separately, application-side, via
+> the [gesture sidecar](gesture_sidecar/) (MediaPipe Hands, RGB-based —
+> see that README for why RGB instead of depth, and its lighting caveats).
+> It only covers single-hand static poses (fist, open hand, thumbs up,
+> peace, point, pinch), not full-body skeletal joints.
 
 > ⚠️ This makes the official Kinect SDK apps stop working. Reinstall from Device
 > Manager to switch back.
@@ -194,6 +198,18 @@ aren't exposed in the UI yet — still edit those in `src/main.cpp`/
 pipeline.filterEnabled      = true;   // flying-pixels filter
 pipeline.filterThresholdMm  = 20.0f;  // depth discontinuity threshold
 ```
+
+## Gesture detection
+
+The "Detect hand gestures" checkbox (on by default) samples every 4th
+captured frame, sends the registered colour frame to the
+[gesture sidecar](gesture_sidecar/) — spawned automatically as a child
+process, driven over its stdin/stdout pipes rather than a network socket —
+and, on a recognised, edge-triggered pose change, sends a `GEVT` frame to
+the server (see `capture/include/GestureWire.h` and `Sender::sendGesture()`).
+If the sidecar's venv isn't set up, this is silently a no-op; it never
+blocks streaming. See `gesture_sidecar/README.md` for one-time setup and
+the gesture→effect mapping.
 
 ## Wire format (HOLO)
 

@@ -16,11 +16,13 @@
 #include <ixwebsocket/IXWebSocketServer.h>
 #include <ixwebsocket/IXHttpServer.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cmath>
 #include <csignal>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -101,6 +103,36 @@ static bool parseCalibration(const std::string& text,
         pos = comma + 1;
     }
     return idx == 16;
+}
+
+// Decode a GEVT gesture-event frame (see capture/include/GestureWire.h for
+// the producer-side encoder — wire layout must stay in sync with it).
+static bool decodeGestureEvent(const uint8_t* data, size_t len, GestureEvent& out) {
+    if (len < 24) return false;
+    if (data[0]!='G'||data[1]!='E'||data[2]!='V'||data[3]!='T') return false;
+
+    uint8_t rawType = data[4];
+    // Only the subset of GestureType that HandGesture actually emits is
+    // accepted — anything else is rejected rather than trusted blindly.
+    switch (static_cast<GestureType>(rawType)) {
+        case GestureType::Fist: case GestureType::OpenHand: case GestureType::Pinch:
+        case GestureType::ThumbsUp: case GestureType::PointFinger: case GestureType::Peace:
+            break;
+        default:
+            return false;
+    }
+    out.type = static_cast<GestureType>(rawType);
+
+    float x, y, z, confidence;
+    std::memcpy(&x,          data + 8,  4);
+    std::memcpy(&y,          data + 12, 4);
+    std::memcpy(&z,          data + 16, 4);
+    std::memcpy(&confidence, data + 20, 4);
+    if (std::isnan(x) || std::isnan(y) || std::isnan(z) || std::isnan(confidence)) return false;
+
+    out.position   = {x, y, z};
+    out.confidence = std::clamp(confidence, 0.f, 1.f);
+    return true;
 }
 
 // Extract a numeric field from a flat JSON object body — no JSON library
@@ -764,6 +796,15 @@ int main(int argc, char* argv[]) {
             cfg.color = {180, 100, 255};
             return std::make_unique<SpawnedObjectEffect>(cfg);
         });
+        mv.registerEffect(GestureType::Pinch, [] {
+            SpawnConfig cfg;
+            cfg.shape      = SpawnShape::Heart;
+            cfg.color      = {255, 60, 110};
+            cfg.gravity    = 0.f;      // float in place
+            cfg.spinSpeed  = 0.8f;
+            cfg.lifetimeMs = 6000.f;
+            return std::make_unique<SpawnedObjectEffect>(cfg);
+        });
         // Motion
         mv.registerEffect(GestureType::Push,
             [] { return std::make_unique<ShockwaveEffect>(); });
@@ -897,8 +938,17 @@ int main(int argc, char* argv[]) {
                 return;
             }
 
-            // Binary → HOLO point cloud frame.
             const auto* data = reinterpret_cast<const uint8_t*>(msg->str.data());
+
+            // Binary → GEVT gesture event (from the capture client's
+            // MediaPipe sidecar) — checked first since it has its own magic.
+            GestureEvent gestureEv;
+            if (decodeGestureEvent(data, msg->str.size(), gestureEv)) {
+                hub.producerPort(sessionKey).pushGestureEvent(sensorId, gestureEv);
+                return;
+            }
+
+            // Binary → HOLO point cloud frame.
             PointCloud cloud;
             if (!decodeHolo(data, msg->str.size(), cloud)) return;
 

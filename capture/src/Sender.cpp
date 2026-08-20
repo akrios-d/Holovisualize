@@ -89,3 +89,13 @@ bool Sender::send(const PointCloud& cloud) {
     auto result = ws_.sendBinary(payload);
     return result.success;
 }
+
+bool Sender::sendGesture(HandGesture type, float x, float y, float z, float confidence) {
+    if (ws_.getReadyState() != ix::ReadyState::Open)
+        return false;
+
+    auto buf = encodeGestureEvent(type, x, y, z, confidence);
+    std::string payload(reinterpret_cast<const char*>(buf.data()), buf.size());
+    auto result = ws_.sendBinary(payload);
+    return result.success;
+}

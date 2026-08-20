@@ -23,6 +23,24 @@ void SessionModelView::setTransform(const std::string& sensorId,
     sensors_[sensorId].transform = m;
 }
 
+void SessionModelView::pushGestureEvent(const std::string& sensorId, GestureEvent ev) {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto it = sensors_.find(sensorId);
+    if (it != sensors_.end()) {
+        // Same row-major 4x4 transform used for point cloud vertices in
+        // buildFrame() — camera space to world space.
+        const auto& m = it->second.transform;
+        const float x = ev.position[0], y = ev.position[1], z = ev.position[2];
+        ev.position[0] = m[0]*x + m[1]*y + m[2]*z  + m[3];
+        ev.position[1] = m[4]*x + m[5]*y + m[6]*z  + m[7];
+        ev.position[2] = m[8]*x + m[9]*y + m[10]*z + m[11];
+    }
+    ev.timestampMs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    externalEvents_.push_back(ev);
+}
+
 std::vector<SessionModelView::SensorInfo> SessionModelView::sensorStats() const {
     std::lock_guard<std::mutex> lock(mu_);
     std::vector<SensorInfo> out;
@@ -107,22 +125,28 @@ std::vector<uint8_t> SessionModelView::buildFrame() {
     }
     if (mesh.vertices.empty()) return {};
 
-    // 3. Gesture detection — run all detectors on the current mesh
-    if (!detectors_.empty()) {
-        uint64_t nowMs = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count());
+    // 3. Gesture detection — run all mesh-based detectors on the current mesh
+    uint64_t nowMs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
 
-        std::vector<GestureEvent> events;
-        for (auto& det : detectors_) {
-            if (!det->enabled) continue;
-            auto ev = det->detect(mesh, nowMs);
-            events.insert(events.end(), ev.begin(), ev.end());
-        }
-
-        // 4. Spawn new effects from events
-        effects_.onGestures(events);
+    std::vector<GestureEvent> events;
+    for (auto& det : detectors_) {
+        if (!det->enabled) continue;
+        auto ev = det->detect(mesh, nowMs);
+        events.insert(events.end(), ev.begin(), ev.end());
     }
+
+    // Merge in externally-recognised events (e.g. MediaPipe sidecar via
+    // pushGestureEvent) — already world-space, queued since the last tick.
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        events.insert(events.end(), externalEvents_.begin(), externalEvents_.end());
+        externalEvents_.clear();
+    }
+
+    // 4. Spawn new effects from events
+    if (!events.empty()) effects_.onGestures(events);
     effects_.update(1000.0f / 30.0f); // ~33 ms per tick at 30 fps
 
     // 5. Merge effect points into the mesh as extra vertices (normal = 0,1,0)

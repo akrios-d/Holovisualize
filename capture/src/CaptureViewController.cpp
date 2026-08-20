@@ -222,6 +222,11 @@ void CaptureViewController::renderConfigPanel() {
     ImGui::Checkbox("Background subtraction", &config_.filterBackground);
 
     ImGui::Spacing();
+    ImGui::SeparatorText("Gestures");
+    ImGui::Checkbox("Detect hand gestures", &config_.enableGestures);
+    ImGui::TextDisabled("Auto-launches the gesture sidecar (capture/gesture_sidecar) — see its README for one-time setup.");
+
+    ImGui::Spacing();
     ImGui::SeparatorText("Depth Range");
     bool rangeChanged = false;
     rangeChanged |= ImGui::SliderFloat("Min (mm)", &config_.segmentMinDepthMm, 0.0f, 8000.0f, "%.0f");
@@ -271,6 +276,9 @@ void CaptureViewController::renderStatusPanel() {
     ImGui::Text("Points: %d",   s.points);
     ImGui::Text("Frames: %d",   s.frameCount);
     ImGui::Text("Lost:   %d",   s.lostTotal);
+    if (config_.enableGestures) {
+        ImGui::Text("Last gesture: %s", s.lastGesture.empty() ? "—" : s.lastGesture.c_str());
+    }
 
     if (!s.message.empty()) {
         ImGui::Spacing();

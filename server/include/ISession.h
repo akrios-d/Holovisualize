@@ -17,6 +17,7 @@
 // consumer side. Neither implementation knows the other's concrete type.
 
 #include "Frame.h"
+#include "GestureEvent.h"
 
 #include <array>
 #include <cstdint>
@@ -50,6 +51,13 @@ public:
     // Store a camera-to-world calibration transform for a sensor.
     virtual void setTransform(const std::string& sensorId,
                               const std::array<float, 16>& m) = 0;
+
+    // Report an externally-recognised gesture (e.g. from the capture
+    // client's MediaPipe sidecar — see capture/gesture_sidecar). `ev`'s
+    // position is in the sensor's own camera space; the model transforms it
+    // to world space using the sensor's calibration before merging it into
+    // the same effect pipeline server-side IGestureDetectors feed.
+    virtual void pushGestureEvent(const std::string& sensorId, GestureEvent ev) = 0;
 };
 
 // ─── ISessionView — the shared socket / bridge ────────────────────────────────

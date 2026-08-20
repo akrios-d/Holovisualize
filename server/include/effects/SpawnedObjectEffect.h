@@ -18,6 +18,7 @@ enum class SpawnShape {
     Crystal,
     Torus,
     Star,
+    Heart,
     ObjFile,    // loaded from a .obj file
 };
 
@@ -94,6 +95,9 @@ private:
             break;
         case SpawnShape::Star:
             base_ = makeStar({0,0,0}, s*0.2f, s, 8, n/8, c);
+            break;
+        case SpawnShape::Heart:
+            base_ = makeHeart({0,0,0}, s, n, c);
             break;
         case SpawnShape::ObjFile:
             loadObj(cfg_.objPath, s, c);
