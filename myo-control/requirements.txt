@@ -1,0 +1,6 @@
+pyomyo
+pyserial
+numpy
+scikit-learn
+joblib
+pynput
