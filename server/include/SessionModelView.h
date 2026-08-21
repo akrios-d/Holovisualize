@@ -12,6 +12,7 @@
 #include "ISession.h"
 #include "IGestureDetector.h"
 #include "EffectGenerator.h"
+#include "VoxelGrid.h"
 
 #include <memory>
 #include <mutex>
@@ -27,6 +28,13 @@ public:
     void setTransform(const std::string& sensorId,
                       const std::array<float, 16>& m) override;
     void pushGestureEvent(const std::string& sensorId, GestureEvent ev) override;
+
+    // Server-authoritative toggle between raw point-cloud passthrough
+    // (default — always solid) and Marching Cubes mesh reconstruction
+    // (closed triangles, but only where the single camera actually saw
+    // surface — see VoxelGrid.h for why/how). Applied on the next tick.
+    void setMeshMode(bool enabled) { meshMode_ = enabled; }
+    bool meshMode() const { return meshMode_; }
 
     // ── ISessionView (the socket) ─────────────────────────────────────────────
     std::vector<uint8_t> buildFrame() override;
@@ -67,4 +75,7 @@ private:
     // transformed to world space, drained into buildFrame()'s event batch
     // on the next tick.
     std::vector<GestureEvent> externalEvents_;
+
+    bool meshMode_ = false;
+    VoxelGrid voxelGrid_;
 };

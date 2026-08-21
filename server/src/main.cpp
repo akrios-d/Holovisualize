@@ -161,6 +161,20 @@ static bool getJsonFloat(const std::string& text, const std::string& key, float&
     } catch (...) { return false; }
 }
 
+// Same spirit as getJsonFloat() above, for a bare true/false field.
+static bool getJsonBool(const std::string& text, const std::string& key, bool& out) {
+    auto kpos = text.find("\"" + key + "\"");
+    if (kpos == std::string::npos) return false;
+    auto cpos = text.find(':', kpos);
+    if (cpos == std::string::npos) return false;
+
+    size_t start = cpos + 1;
+    while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start]))) start++;
+    if (text.compare(start, 4, "true") == 0)  { out = true;  return true; }
+    if (text.compare(start, 5, "false") == 0) { out = false; return true; }
+    return false;
+}
+
 // ─── Display config persistence (point size, bound box) ───────────────────────
 // Survives restarts so the sender doesn't have to re-tune the AR/dashboard
 // view every time server.exe is relaunched.
@@ -175,7 +189,8 @@ static void saveConfig(const Hub& hub) {
       << "{\"pointSize\":" << hub.pointSize()
       << ",\"minX\":" << b.minX << ",\"maxX\":" << b.maxX
       << ",\"minY\":" << b.minY << ",\"maxY\":" << b.maxY
-      << ",\"minZ\":" << b.minZ << ",\"maxZ\":" << b.maxZ << "}";
+      << ",\"minZ\":" << b.minZ << ",\"maxZ\":" << b.maxZ
+      << ",\"meshMode\":" << (hub.meshMode() ? "true" : "false") << "}";
 }
 
 static void loadConfig(Hub& hub) {
@@ -192,6 +207,9 @@ static void loadConfig(Hub& hub) {
     getJsonFloat(text, "minY", b.minY); getJsonFloat(text, "maxY", b.maxY);
     getJsonFloat(text, "minZ", b.minZ); getJsonFloat(text, "maxZ", b.maxZ);
     hub.setBoundBox(b);
+
+    bool meshMode = false;
+    if (getJsonBool(text, "meshMode", meshMode)) hub.setMeshMode(meshMode);
 
     std::cout << "[main] loaded display config from " << kConfigPath << "\n";
 }
@@ -210,6 +228,7 @@ static std::string buildStatusJson(const Hub& hub) {
       << R"(,"bounds":{"minX":)" << s.bounds.minX << R"(,"maxX":)" << s.bounds.maxX
       << R"(,"minY":)" << s.bounds.minY << R"(,"maxY":)" << s.bounds.maxY
       << R"(,"minZ":)" << s.bounds.minZ << R"(,"maxZ":)" << s.bounds.maxZ << "}"
+      << R"(,"mesh_mode":)" << (s.meshMode ? "true" : "false")
       << std::setprecision(1)
       << R"(,"uptime_s":)" << s.uptimeS
       << R"(,"sessions":[)";
@@ -300,12 +319,25 @@ static const char* kDashboardHtml = R"html(<!DOCTYPE html>
     </select>
   </div>
   <canvas id="glcanvas" width="1200" height="480" style="width:100%;height:420px;display:block;background:#000;border-radius:8px;cursor:grab"></canvas>
-  <div id="view-stats" style="margin-top:8px;font-size:.75rem;color:var(--muted);font-family:monospace">not connected</div>
+  <div style="margin-top:8px;display:flex;align-items:center;justify-content:space-between;gap:10px">
+    <div id="view-stats" style="font-size:.75rem;color:var(--muted);font-family:monospace">not connected</div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:.7rem;color:var(--muted);font-family:monospace">axes: <span style="color:#ff4444">X</span> <span style="color:#44ff44">Y</span> <span style="color:#4488ff">Z</span></span>
+      <button id="reset-view" style="background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-family:monospace;font-size:.75rem;cursor:pointer">Reset View</button>
+    </div>
+  </div>
 
   <div style="margin-top:12px;display:flex;align-items:center;gap:10px;font-family:monospace;font-size:.75rem">
     <span style="color:var(--muted)">Point size</span>
     <input id="point-size" type="range" min="0.005" max="0.08" step="0.001" value="0.02" style="flex:1">
     <span id="point-size-val" style="color:var(--muted);width:40px">0.020</span>
+  </div>
+
+  <div style="margin-top:10px;display:flex;align-items:center;gap:8px;font-family:monospace;font-size:.75rem">
+    <input id="mesh-mode" type="checkbox">
+    <label for="mesh-mode" style="color:var(--muted);cursor:pointer">
+      Closed mesh (Marching Cubes) — reconstructs a solid surface instead of loose points. Only covers what the camera can actually see.
+    </label>
   </div>
 
   <div style="margin-top:14px">
@@ -376,6 +408,10 @@ refresh();
   const picker = document.getElementById('view-session');
   const gl = canvas.getContext('webgl');
   if(!gl){ statsEl.textContent='WebGL not available in this browser.'; return; }
+  // WebGL1 only supports 16-bit indices by default — a Marching Cubes mesh
+  // easily has more than 65536 vertices, so 32-bit indices need this
+  // extension explicitly (near-universally supported).
+  const uintIndicesExt = gl.getExtension('OES_element_index_uint');
 
   const vsSrc=`
     attribute vec3 aPos;
@@ -415,15 +451,67 @@ refresh();
   const aPos = gl.getAttribLocation(prog, 'aPos');
   const aColor = gl.getAttribLocation(prog, 'aColor');
 
+  // Axis gizmo — plain coloured lines at the world origin (X red, Y green,
+  // Z blue — standard RGB=XYZ convention), drawn regardless of point cloud
+  // bounds/size so orientation is visible even before a session connects.
+  const axisVsSrc=`
+    attribute vec3 aPos;
+    attribute vec3 aColor;
+    uniform mat4 uMVP;
+    varying vec3 vColor;
+    void main(){ gl_Position = uMVP * vec4(aPos, 1.0); vColor = aColor; }`;
+  const axisProg = gl.createProgram();
+  gl.attachShader(axisProg, compile(gl.VERTEX_SHADER, axisVsSrc));
+  gl.attachShader(axisProg, compile(gl.FRAGMENT_SHADER, fsSrc));
+  gl.linkProgram(axisProg);
+  const axisUMVP = gl.getUniformLocation(axisProg, 'uMVP');
+  const axisAPos = gl.getAttribLocation(axisProg, 'aPos');
+  const axisAColor = gl.getAttribLocation(axisProg, 'aColor');
+
+  const kAxisLen = 0.3; // metres
+  // prettier-ignore
+  const axisPositions = new Float32Array([
+    0,0,0,  kAxisLen,0,0,   // X
+    0,0,0,  0,kAxisLen,0,   // Y
+    0,0,0,  0,0,kAxisLen,   // Z
+  ]);
+  // prettier-ignore
+  const axisColors = new Float32Array([
+    1,0.27,0.27,  1,0.27,0.27,
+    0.27,1,0.27,  0.27,1,0.27,
+    0.27,0.53,1,  0.27,0.53,1,
+  ]);
+  const axisPosVbo = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, axisPosVbo);
+  gl.bufferData(gl.ARRAY_BUFFER, axisPositions, gl.STATIC_DRAW);
+  const axisColorVbo = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, axisColorVbo);
+  gl.bufferData(gl.ARRAY_BUFFER, axisColors, gl.STATIC_DRAW);
+
+  function drawAxes(mvp){
+    gl.useProgram(axisProg);
+    gl.uniformMatrix4fv(axisUMVP, false, mvp);
+    gl.bindBuffer(gl.ARRAY_BUFFER, axisPosVbo);
+    gl.enableVertexAttribArray(axisAPos);
+    gl.vertexAttribPointer(axisAPos, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, axisColorVbo);
+    gl.enableVertexAttribArray(axisAColor);
+    gl.vertexAttribPointer(axisAColor, 3, gl.FLOAT, false, 0, 0);
+    gl.lineWidth(2);
+    gl.drawArrays(gl.LINES, 0, 6);
+  }
+)html2" R"html3(
   // Point size + bound box are server-authoritative (see Hub::pointSize_/
   // bounds_) — every viewer (this dashboard, the AR page) reads the same
   // values from /api/status, and this UI writes back via POST /api/config,
   // instead of each viewer keeping its own local-only setting.
   let pointSize = 0.02;
+  let meshMode = false;
   const bounds = { minX:-100, maxX:100, minY:-100, maxY:100, minZ:-100, maxZ:100 };
 
   const pointSizeInput = document.getElementById('point-size');
   const pointSizeVal   = document.getElementById('point-size-val');
+  const meshModeInput  = document.getElementById('mesh-mode');
 
   let pushTimer = null;
   function pushConfig(){
@@ -432,7 +520,7 @@ refresh();
       fetch('/api/config', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ pointSize, ...bounds }),
+        body: JSON.stringify({ pointSize, meshMode, ...bounds }),
       }).catch(()=>{});
     }, 150);
   }
@@ -440,6 +528,11 @@ refresh();
   pointSizeInput.addEventListener('input', () => {
     pointSize = parseFloat(pointSizeInput.value);
     pointSizeVal.textContent = pointSize.toFixed(3);
+    pushConfig();
+  });
+
+  meshModeInput.addEventListener('change', () => {
+    meshMode = meshModeInput.checked;
     pushConfig();
   });
 
@@ -481,14 +574,25 @@ refresh();
       Object.assign(bounds, d.bounds);
       for(const k in boundsInputs) boundsInputs[k].value = bounds[k];
     }
+    if(typeof d.mesh_mode === 'boolean'){
+      meshMode = d.mesh_mode;
+      meshModeInput.checked = meshMode;
+    }
   }).catch(()=>{});
 
   const vbo = gl.createBuffer();
   const colorVbo = gl.createBuffer();
+  const ibo = gl.createBuffer();
   let pointCount = 0;
+  let indexCount = 0; // >0 when the current frame is a Marching Cubes mesh (draw triangles, not points)
 
   // Orbit camera — same controls as preview.exe (drag to orbit, wheel to zoom).
-  let yaw=0, pitch=20, dist=2.5, cx=0, cy=0.8, cz=0;
+  const kDefaultCam = { yaw:0, pitch:20, dist:2.5, cx:0, cy:0.8, cz:0 };
+  let yaw=kDefaultCam.yaw, pitch=kDefaultCam.pitch, dist=kDefaultCam.dist,
+      cx=kDefaultCam.cx, cy=kDefaultCam.cy, cz=kDefaultCam.cz;
+  document.getElementById('reset-view').addEventListener('click', () => {
+    ({ yaw, pitch, dist, cx, cy, cz } = kDefaultCam);
+  });
   let dragging=false, lastX=0, lastY=0;
   canvas.addEventListener('mousedown', e=>{dragging=true; lastX=e.clientX; lastY=e.clientY; canvas.style.cursor='grabbing';});
   window.addEventListener('mouseup', ()=>{dragging=false; canvas.style.cursor='grab';});
@@ -566,9 +670,12 @@ refresh();
     const dv = new DataView(buf);
     if(dv.getUint8(0)!==77||dv.getUint8(1)!==69||dv.getUint8(2)!==83||dv.getUint8(3)!==72) return null; // "MESH"
     const nv = dv.getUint32(4, true);
+    const nTris = dv.getUint32(8, true);
     const positions = new Float32Array(nv*3);
     // Raw point-cloud frames repurpose the "normal" slot (nx,ny,nz) to carry
-    // RGB in 0..1 instead — see SessionModelView::buildFrame().
+    // RGB in 0..1 instead — see SessionModelView::buildFrame(). Marching
+    // Cubes mesh frames do the same (see MarchingCubes.cpp) for the same
+    // reason: nothing here does real lighting, so a normal would be wasted.
     const colors = new Float32Array(nv*3);
     let o = 12;
     for(let i=0;i<nv;i++){
@@ -580,7 +687,12 @@ refresh();
       colors[i*3+2] = dv.getFloat32(o+20, true);
       o += 24;
     }
-    return {positions, colors};
+    let indices = null;
+    if(nTris > 0){
+      indices = new Uint32Array(nTris*3);
+      for(let i=0;i<nTris*3;i++){ indices[i] = dv.getUint32(o, true); o += 4; }
+    }
+    return {positions, colors, indices};
   }
 
   let ws = null, frameCount=0, lastFrameAt=performance.now(), fps=0;
@@ -604,6 +716,13 @@ refresh();
       gl.bufferData(gl.ARRAY_BUFFER, decoded.positions, gl.DYNAMIC_DRAW);
       gl.bindBuffer(gl.ARRAY_BUFFER, colorVbo);
       gl.bufferData(gl.ARRAY_BUFFER, decoded.colors, gl.DYNAMIC_DRAW);
+      if(decoded.indices){
+        indexCount = decoded.indices.length;
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, decoded.indices, gl.DYNAMIC_DRAW);
+      } else {
+        indexCount = 0;
+      }
       frameCount++;
       const now = performance.now();
       if(now - lastFrameAt > 1000){ fps = frameCount*1000/(now-lastFrameAt); frameCount=0; lastFrameAt=now; }
@@ -632,7 +751,6 @@ refresh();
     gl.viewport(0,0,canvas.width,canvas.height);
     gl.clearColor(0,0,0,1);
     gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
-    if(pointCount===0) return;
 
     const yr=yaw*Math.PI/180, pr=pitch*Math.PI/180;
     const ex=cx+dist*Math.cos(pr)*Math.sin(yr);
@@ -641,6 +759,9 @@ refresh();
     const proj = perspective(45*Math.PI/180, canvas.width/canvas.height, 0.05, 50);
     const view = lookAt(ex,ey,ez,cx,cy,cz);
     const mvp = mat4Mul(proj, view);
+
+    drawAxes(mvp);
+    if(pointCount===0) return;
 
     gl.useProgram(prog);
     gl.uniformMatrix4fv(uMVP, false, mvp);
@@ -654,13 +775,18 @@ refresh();
     gl.bindBuffer(gl.ARRAY_BUFFER, colorVbo);
     gl.enableVertexAttribArray(aColor);
     gl.vertexAttribPointer(aColor, 3, gl.FLOAT, false, 0, 0);
-    gl.drawArrays(gl.POINTS, 0, pointCount);
+    if(indexCount > 0){
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+      gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_INT, 0);
+    } else {
+      gl.drawArrays(gl.POINTS, 0, pointCount);
+    }
   }
   render();
 })();
 </script>
 </body>
-</html>)html2";
+</html>)html3";
 
 static void startDashboard(Hub& hub, int httpPort) {
     ix::HttpServer httpServer(httpPort, "0.0.0.0");
@@ -692,6 +818,10 @@ static void startDashboard(Hub& hub, int httpPort) {
             getJsonFloat(req->body, "minY", b.minY); getJsonFloat(req->body, "maxY", b.maxY);
             getJsonFloat(req->body, "minZ", b.minZ); getJsonFloat(req->body, "maxZ", b.maxZ);
             hub.setBoundBox(b);
+
+            bool meshMode;
+            if (getJsonBool(req->body, "meshMode", meshMode)) hub.setMeshMode(meshMode);
+
             saveConfig(hub);
 
             resp->headers["Content-Type"] = "application/json";

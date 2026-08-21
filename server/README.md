@@ -16,22 +16,47 @@ SessionModelView::updateCloud()
     │  per-sensor latest cloud + calibration transform
     ▼  (30 fps timer — Hub::tick())
 SessionModelView::buildFrame()
-    │  point-cloud passthrough by default (see note below) → MESH binary frame
+    │  point-cloud passthrough by default, or a closed mesh — see below → MESH binary frame
     ▼
 SessionViewController::tick()
     ├─▶ KCP/UDP consumers (native: preview.exe)      — udp://server:8081
     └─▶ WS viewers (browser: dashboard, viewer/ AR)  — ws://server:8080/ws?session=KEY&role=viewer
 ```
 
-Point cloud passthrough vs. Marching Cubes: `SessionModelView::buildFrame()`
-currently streams the transformed points straight through as loose vertices
-(`nTris = 0`) instead of voxelising + Marching Cubes. The isosurface path
-(`VoxelGrid`, `marchingCubes()`) is still in the codebase but disabled —
-`VoxelGrid::fill()`'s density is normalised by the single highest-density
-voxel, which collapses everything else below the isosurface threshold when
-any region has an outlier-dense splat (e.g. a hand passing near the
-`segmentMinDepthMm` cutoff). Re-enabling it needs that normalisation fixed
-(percentile-based or per-voxel clamped, not raw global max) first.
+### Point cloud passthrough vs. Marching Cubes
+
+Default is passthrough: `SessionModelView::buildFrame()` streams transformed
+points straight through as loose vertices (`nTris = 0`). Toggle
+"Closed mesh (Marching Cubes)" on the dashboard (`POST /api/config
+{"meshMode":true}`, server-authoritative and persisted — same pattern as
+point size/bounds) to reconstruct a solid triangulated surface instead.
+
+This used to be a plain occupancy/density grid (`VoxelGrid::fill()`
+splatting points into voxels, normalised by the single highest-density
+voxel) — and it collapsed: one near-field outlier point (common Kinect
+multipath/reflection noise) could dominate that normalisation and push the
+real subject's density below the isosurface threshold, so nothing rendered.
+`VoxelGrid` now builds a **TSDF** (truncated signed distance field) instead —
+see the extensive comment in `include/VoxelGrid.h` — a physical quantity in
+metres that needs no normalisation, so one bad point only pollutes the
+handful of voxels along its own ray.
+
+Two things this deliberately does *not* do, both explained in that same
+comment:
+- **No temporal fusion across frames**, unlike Microsoft's KinectFusion
+  (moving camera, static scene — averaging over time works because the same
+  surface point gets re-observed). Our camera is fixed and the *subject*
+  moves, so fusing across time would smear a moving person; every frame's
+  TSDF is computed fresh from that frame alone.
+- **No multi-camera spatial fusion**, unlike Microsoft's Holoportation
+  (8+ synchronised cameras, fused every instant to fill occlusion gaps and
+  denoise). We only have one Kinect, so the mesh only covers what that one
+  camera can see this frame — no filling in the back of a person, same
+  fundamental limitation the point cloud already has.
+- The reconstruction volume is a **fixed-size box centred on the point
+  cloud's centroid** each frame (not fit to point extents) specifically so
+  a stray outlier can't blow up the grid and coarsen every voxel — it just
+  falls outside the box and is ignored.
 
 The HTTP dashboard (`:8082` by default) is also served by this process —
 see "Dashboard / HTTP API" below.
@@ -159,9 +184,10 @@ size sliders).
 |---|---|---|
 | Point size | 0.02 m | Live-adjustable — dashboard's "Live view" slider, `POST /api/config`, persisted across restarts. |
 | Bound box | ±100 m (effectively off) | Same as point size — visual clip only, doesn't affect what's stored/broadcast. |
-| Voxel resolution | 128³ | Only matters if Marching Cubes is re-enabled (see Architecture) — second CLI arg to `server.exe`. |
-| ISO level | 0.5 | Isosurface threshold, only used if Marching Cubes is re-enabled. `SessionModelView::buildFrame()`. |
-| Gaussian splat radius | 2 voxels | Same — `VoxelGrid::fill()`. |
+| Voxel resolution | 128³ | Only matters with "Closed mesh" on (see Architecture) — second CLI arg to `server.exe`. |
+| ISO level | 0.0 | Zero-crossing of the signed distance field — `marchingCubes()`'s default. |
+| TSDF truncation distance | 0.05 m | `VoxelGrid::kTrunc`. |
+| Reconstruction volume | 2×2.4×2 m, centred on the cloud's centroid | `VoxelGrid::fill()` — fixed size, not fit to point extents (see Architecture). |
 
 ## Gesture / effects system
 

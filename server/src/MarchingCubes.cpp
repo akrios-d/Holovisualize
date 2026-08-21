@@ -1,5 +1,6 @@
 #include "MarchingCubes.h"
 #include <unordered_map>
+#include <algorithm>
 #include <cmath>
 #include <array>
 #include <tuple>
@@ -303,27 +304,29 @@ static const int triTable[256][16] = {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 struct Vec3 { float x, y, z; };
+struct Corner { Vec3 pos; float val; std::array<uint8_t,3> color; };
+struct EdgePoint { Vec3 pos; Vec3 color; }; // color kept as float 0..1 until final write
 
 static Vec3 lerp(const Vec3& a, const Vec3& b, float t) {
     return { a.x + t*(b.x-a.x), a.y + t*(b.y-a.y), a.z + t*(b.z-a.z) };
 }
 
-static Vec3 interpolateVertex(float isoLevel,
-                               Vec3 p1, float v1,
-                               Vec3 p2, float v2)
+static EdgePoint interpolateEdge(float isoLevel, const Corner& c1, const Corner& c2)
 {
-    if (std::abs(v1 - v2) < 1e-6f) return p1;
-    float t = (isoLevel - v1) / (v2 - v1);
-    return lerp(p1, p2, t);
+    float t = (std::abs(c1.val - c2.val) < 1e-6f) ? 0.5f : (isoLevel - c1.val) / (c2.val - c1.val);
+    t = std::max(0.f, std::min(1.f, t));
+    Vec3 col1{ c1.color[0]/255.f, c1.color[1]/255.f, c1.color[2]/255.f };
+    Vec3 col2{ c2.color[0]/255.f, c2.color[1]/255.f, c2.color[2]/255.f };
+    return { lerp(c1.pos, c2.pos, t), lerp(col1, col2, t) };
 }
 
 // ─── Main algorithm ───────────────────────────────────────────────────────────
 
 Mesh marchingCubes(const VoxelGrid& grid, float isoLevel)
 {
-    // We build a list of triangles first (duplicate vertices), then weld them.
-    // For the live preview at 30fps, the simple approach is fine.
-    std::vector<Vec3> triVerts; // 3 per triangle
+    // We build a list of triangles first (duplicate vertices), no welding —
+    // fine for a live 30fps preview.
+    std::vector<EdgePoint> triVerts; // 3 per triangle
     triVerts.reserve(32768);
 
     const int rx = grid.resX() - 1;
@@ -334,57 +337,36 @@ Mesh marchingCubes(const VoxelGrid& grid, float isoLevel)
     for (int j = 0; j < ry; ++j)
     for (int i = 0; i < rx; ++i)
     {
-        // Cube corner values
-        float val[8] = {
-            grid.value(i,   j,   k  ),
-            grid.value(i+1, j,   k  ),
-            grid.value(i+1, j+1, k  ),
-            grid.value(i,   j+1, k  ),
-            grid.value(i,   j,   k+1),
-            grid.value(i+1, j,   k+1),
-            grid.value(i+1, j+1, k+1),
-            grid.value(i,   j+1, k+1)
-        };
-
-        // Cube corner world positions
-        Vec3 pos[8] = {
-            { grid.worldX(i),   grid.worldY(j),   grid.worldZ(k)   },
-            { grid.worldX(i+1), grid.worldY(j),   grid.worldZ(k)   },
-            { grid.worldX(i+1), grid.worldY(j+1), grid.worldZ(k)   },
-            { grid.worldX(i),   grid.worldY(j+1), grid.worldZ(k)   },
-            { grid.worldX(i),   grid.worldY(j),   grid.worldZ(k+1) },
-            { grid.worldX(i+1), grid.worldY(j),   grid.worldZ(k+1) },
-            { grid.worldX(i+1), grid.worldY(j+1), grid.worldZ(k+1) },
-            { grid.worldX(i),   grid.worldY(j+1), grid.worldZ(k+1) }
+        Corner c[8] = {
+            { { grid.worldX(i),   grid.worldY(j),   grid.worldZ(k)   }, grid.value(i,  j,  k  ), grid.color(i,  j,  k  ) },
+            { { grid.worldX(i+1), grid.worldY(j),   grid.worldZ(k)   }, grid.value(i+1,j,  k  ), grid.color(i+1,j,  k  ) },
+            { { grid.worldX(i+1), grid.worldY(j+1), grid.worldZ(k)   }, grid.value(i+1,j+1,k  ), grid.color(i+1,j+1,k  ) },
+            { { grid.worldX(i),   grid.worldY(j+1), grid.worldZ(k)   }, grid.value(i,  j+1,k  ), grid.color(i,  j+1,k  ) },
+            { { grid.worldX(i),   grid.worldY(j),   grid.worldZ(k+1) }, grid.value(i,  j,  k+1), grid.color(i,  j,  k+1) },
+            { { grid.worldX(i+1), grid.worldY(j),   grid.worldZ(k+1) }, grid.value(i+1,j,  k+1), grid.color(i+1,j,  k+1) },
+            { { grid.worldX(i+1), grid.worldY(j+1), grid.worldZ(k+1) }, grid.value(i+1,j+1,k+1), grid.color(i+1,j+1,k+1) },
+            { { grid.worldX(i),   grid.worldY(j+1), grid.worldZ(k+1) }, grid.value(i,  j+1,k+1), grid.color(i,  j+1,k+1) },
         };
 
         int cubeIdx = 0;
-        if (val[0] < isoLevel) cubeIdx |= 1;
-        if (val[1] < isoLevel) cubeIdx |= 2;
-        if (val[2] < isoLevel) cubeIdx |= 4;
-        if (val[3] < isoLevel) cubeIdx |= 8;
-        if (val[4] < isoLevel) cubeIdx |= 16;
-        if (val[5] < isoLevel) cubeIdx |= 32;
-        if (val[6] < isoLevel) cubeIdx |= 64;
-        if (val[7] < isoLevel) cubeIdx |= 128;
+        for (int b = 0; b < 8; ++b) if (c[b].val < isoLevel) cubeIdx |= (1 << b);
 
         if (edgeTable[cubeIdx] == 0) continue;
 
-        // Interpolate edge vertices
-        Vec3 edge[12];
+        EdgePoint edge[12];
         int et = edgeTable[cubeIdx];
-        if (et & 1)    edge[0]  = interpolateVertex(isoLevel,pos[0],val[0],pos[1],val[1]);
-        if (et & 2)    edge[1]  = interpolateVertex(isoLevel,pos[1],val[1],pos[2],val[2]);
-        if (et & 4)    edge[2]  = interpolateVertex(isoLevel,pos[2],val[2],pos[3],val[3]);
-        if (et & 8)    edge[3]  = interpolateVertex(isoLevel,pos[3],val[3],pos[0],val[0]);
-        if (et & 16)   edge[4]  = interpolateVertex(isoLevel,pos[4],val[4],pos[5],val[5]);
-        if (et & 32)   edge[5]  = interpolateVertex(isoLevel,pos[5],val[5],pos[6],val[6]);
-        if (et & 64)   edge[6]  = interpolateVertex(isoLevel,pos[6],val[6],pos[7],val[7]);
-        if (et & 128)  edge[7]  = interpolateVertex(isoLevel,pos[7],val[7],pos[4],val[4]);
-        if (et & 256)  edge[8]  = interpolateVertex(isoLevel,pos[0],val[0],pos[4],val[4]);
-        if (et & 512)  edge[9]  = interpolateVertex(isoLevel,pos[1],val[1],pos[5],val[5]);
-        if (et & 1024) edge[10] = interpolateVertex(isoLevel,pos[2],val[2],pos[6],val[6]);
-        if (et & 2048) edge[11] = interpolateVertex(isoLevel,pos[3],val[3],pos[7],val[7]);
+        if (et & 1)    edge[0]  = interpolateEdge(isoLevel, c[0], c[1]);
+        if (et & 2)    edge[1]  = interpolateEdge(isoLevel, c[1], c[2]);
+        if (et & 4)    edge[2]  = interpolateEdge(isoLevel, c[2], c[3]);
+        if (et & 8)    edge[3]  = interpolateEdge(isoLevel, c[3], c[0]);
+        if (et & 16)   edge[4]  = interpolateEdge(isoLevel, c[4], c[5]);
+        if (et & 32)   edge[5]  = interpolateEdge(isoLevel, c[5], c[6]);
+        if (et & 64)   edge[6]  = interpolateEdge(isoLevel, c[6], c[7]);
+        if (et & 128)  edge[7]  = interpolateEdge(isoLevel, c[7], c[4]);
+        if (et & 256)  edge[8]  = interpolateEdge(isoLevel, c[0], c[4]);
+        if (et & 512)  edge[9]  = interpolateEdge(isoLevel, c[1], c[5]);
+        if (et & 1024) edge[10] = interpolateEdge(isoLevel, c[2], c[6]);
+        if (et & 2048) edge[11] = interpolateEdge(isoLevel, c[3], c[7]);
 
         for (int t = 0; triTable[cubeIdx][t] != -1; t += 3) {
             triVerts.push_back(edge[triTable[cubeIdx][t  ]]);
@@ -393,36 +375,16 @@ Mesh marchingCubes(const VoxelGrid& grid, float isoLevel)
         }
     }
 
-    // --- Build Mesh with per-vertex normals from face normals (accumulate) ---
+    // No current viewer does real lighting (unlit points/vertices only), so
+    // — matching SessionModelView's point-passthrough mode and keeping the
+    // wire format unchanged — colour rides in the nx/ny/nz slot instead of
+    // a true surface normal.
     Mesh mesh;
-    const size_t nTris = triVerts.size() / 3;
     mesh.vertices.resize(triVerts.size());
     mesh.indices.resize(triVerts.size());
-
-    // First pass: compute face normals and accumulate at each vertex
-    std::vector<Vec3> faceNormals(nTris);
-    for (size_t t = 0; t < nTris; ++t) {
-        const Vec3& a = triVerts[t*3];
-        const Vec3& b = triVerts[t*3+1];
-        const Vec3& c = triVerts[t*3+2];
-        // Edge vectors
-        float ux = b.x-a.x, uy = b.y-a.y, uz = b.z-a.z;
-        float vx = c.x-a.x, vy = c.y-a.y, vz = c.z-a.z;
-        // Cross product
-        float nx = uy*vz - uz*vy;
-        float ny = uz*vx - ux*vz;
-        float nz = ux*vy - uy*vx;
-        float len = std::sqrt(nx*nx + ny*ny + nz*nz);
-        if (len > 1e-8f) { nx/=len; ny/=len; nz/=len; }
-        faceNormals[t] = { nx, ny, nz };
-    }
-
-    // Each vertex gets the face normal of its triangle (flat shading).
-    // For smooth shading we'd need to weld — skip that for real-time performance.
     for (size_t v = 0; v < triVerts.size(); ++v) {
-        const Vec3& p = triVerts[v];
-        const Vec3& n = faceNormals[v / 3];
-        mesh.vertices[v] = { p.x, p.y, p.z, n.x, n.y, n.z };
+        const auto& ep = triVerts[v];
+        mesh.vertices[v] = { ep.pos.x, ep.pos.y, ep.pos.z, ep.color.x, ep.color.y, ep.color.z };
         mesh.indices[v]  = static_cast<uint32_t>(v);
     }
 

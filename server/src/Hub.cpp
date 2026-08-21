@@ -109,6 +109,12 @@ void Hub::tick() {
         s.vc->tick();
 }
 
+void Hub::setMeshMode(bool enabled) {
+    meshMode_ = enabled;
+    std::lock_guard<std::mutex> lock(mu_);
+    for (auto& [key, s] : sessions_) s.mv->setMeshMode(enabled);
+}
+
 int Hub::totalConsumers() const {
     std::lock_guard<std::mutex> lock(mu_);
     int total = 0;
@@ -124,6 +130,7 @@ Hub::HubStats Hub::getStats() const {
     stats.voxelRes  = voxelRes_;
     stats.pointSize = pointSize_;
     stats.bounds    = bounds_;
+    stats.meshMode  = meshMode_;
     stats.uptimeS  = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now() - startTime_).count());
@@ -151,6 +158,7 @@ Hub::Session& Hub::getOrCreate(const std::string& key) {
     Session s;
     s.mv = std::make_unique<SessionModelView>(voxelRes_);
     s.vc = std::make_unique<SessionViewController>(*s.mv, key);
+    s.mv->setMeshMode(meshMode_);
     if (configurator_) configurator_(*s.mv);
     sessions_[key] = std::move(s);
     std::cout << "[Hub] session created: " << key << "\n";

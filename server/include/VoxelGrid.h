@@ -5,31 +5,73 @@
 #include <array>
 #include <limits>
 #include <cmath>
+#include <cstdint>
 
-// 3-D occupancy grid used as input to Marching Cubes.
+// 3-D truncated signed distance field (TSDF) used as input to Marching Cubes.
 //
-// Voxels are stored in Z-major order: index(i,j,k) = k*resY*resX + j*resX + i
-// Values range [0,1]: 0 = empty, 1 = fully occupied.
-
+// Each voxel holds the signed distance from that point to the nearest
+// observed surface, truncated to ±truncDist(). Positive = in front of the
+// surface (empty space the camera can see through), negative = behind it
+// (inside the object, trusted only near the zero crossing). The isosurface
+// sits at the zero crossing, extracted with isoLevel=0 in MarchingCubes.
+//
+// Why TSDF and not an occupancy/density grid (this file's previous
+// approach): a density grid needs normalising by its own peak value, and a
+// single stray near-field point (common Kinect multipath/reflection noise)
+// can dominate that peak and collapse the whole reconstruction. A signed
+// distance is a physical quantity in metres — no normalisation step, so one
+// bad point only pollutes the handful of voxels along its own ray.
+//
+// This also has no temporal fusion across frames (unlike Microsoft's
+// KinectFusion, which assumes a moving camera over a static scene) — our
+// camera is fixed and the *subject* moves, so averaging across frames would
+// smear a moving person. Each frame's TSDF is computed fresh. See
+// server/README.md's Marching Cubes section for the fuller writeup
+// (KinectFusion vs. Holoportation vs. this single-camera fallback).
+//
+// Since capture only sends the projected point cloud (not the raw depth
+// image + intrinsics), the "measured depth" this TSDF compares voxels
+// against is reconstructed by re-projecting the cloud into an angular
+// (yaw/pitch) bin grid per sensor and keeping the nearest point per bin —
+// effectively rebuilding a coarse synthetic depth image. Each bin also
+// keeps its point's colour, which MarchingCubes reuses for output vertex
+// colour (bins are looked up again per-voxel — no separate 3-D colour
+// grid needed).
 class VoxelGrid {
 public:
-    // resolution: voxels per side (default 128³ balances quality and latency)
+    // resolution: voxels per side. The grid now covers a small, fixed-size
+    // volume (see fill()) rather than the whole scene, so this can stay
+    // fairly modest — 96-128 is plenty for a single person at a few metres.
     explicit VoxelGrid(int resX = 128, int resY = 128, int resZ = 128)
         : resX_(resX), resY_(resY), resZ_(resZ)
-        , data_(static_cast<size_t>(resX) * resY * resZ, 0.f)
+        , data_(static_cast<size_t>(resX) * resY * resZ, kTrunc)
+        , color_(static_cast<size_t>(resX) * resY * resZ, {0, 0, 0})
     {}
 
-    // Fills the grid from one or more transformed point clouds.
-    // transforms: row-major 4×4 camera-to-world matrices (identity if uncalibrated).
+    // Fills the grid from one or more sensors' point clouds (camera space —
+    // NOT yet transformed to world) plus their camera-to-world transforms.
+    // The volume is a fixed-size box centred on the clouds' combined
+    // centroid (in world space) each call — bounded regardless of any
+    // single outlier point, unlike computing bounds from point extents.
     void fill(const std::vector<PointCloud>& clouds,
               const std::vector<std::array<float,16>>& transforms);
 
-    // Value at voxel (i,j,k) in [0,1].
+    // Signed distance at voxel (i,j,k), truncated to ±truncDist(). Out of
+    // range returns +truncDist() (definitely-empty sentinel) rather than 0,
+    // so grid edges never falsely read as "near the surface".
     float value(int i, int j, int k) const {
         if (i < 0 || j < 0 || k < 0 || i >= resX_ || j >= resY_ || k >= resZ_)
-            return 0.f;
-        return data_[idx(i,j,k)];
+            return kTrunc;
+        return data_[idx(i, j, k)];
     }
+
+    std::array<uint8_t, 3> color(int i, int j, int k) const {
+        if (i < 0 || j < 0 || k < 0 || i >= resX_ || j >= resY_ || k >= resZ_)
+            return {0, 0, 0};
+        return color_[idx(i, j, k)];
+    }
+
+    static constexpr float kTrunc = 0.05f; // truncation distance, metres
 
     int resX() const { return resX_; }
     int resY() const { return resY_; }
@@ -52,8 +94,9 @@ public:
 private:
     int resX_, resY_, resZ_;
     std::vector<float> data_;
+    std::vector<std::array<uint8_t, 3>> color_;
 
-    // World bounds (set during fill).
+    // World bounds (set during fill — a fixed-size box around the centroid).
     float minX_ = -1.f, maxX_ = 1.f;
     float minY_ = -1.f, maxY_ = 2.f;
     float minZ_ =  0.f, maxZ_ = 3.f;
@@ -62,14 +105,5 @@ private:
         return static_cast<size_t>(k) * resY_ * resX_
              + static_cast<size_t>(j) * resX_
              + static_cast<size_t>(i);
-    }
-
-    // Transform a point with a 4×4 row-major matrix.
-    static void transform(const std::array<float,16>& m,
-                          float ix, float iy, float iz,
-                          float& ox, float& oy, float& oz) {
-        ox = m[0]*ix + m[1]*iy + m[2]*iz  + m[3];
-        oy = m[4]*ix + m[5]*iy + m[6]*iz  + m[7];
-        oz = m[8]*ix + m[9]*iy + m[10]*iz + m[11];
     }
 };

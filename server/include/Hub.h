@@ -73,6 +73,7 @@ public:
         int                      voxelRes  = 0;
         float                    pointSize = 0.f;
         BoundBox                 bounds;
+        bool                     meshMode  = false;
         uint64_t                 uptimeS   = 0;
         std::vector<SessionStats> sessions;
     };
@@ -91,6 +92,14 @@ public:
     // by every viewer of a session.
     void      setBoundBox(const BoundBox& b) { bounds_ = b; }
     BoundBox  boundBox() const { return bounds_; }
+
+    // Point-cloud passthrough vs. Marching Cubes mesh reconstruction — see
+    // SessionModelView::setMeshMode(). Global (applies to every session,
+    // present and future), unlike pointSize/bounds which are purely
+    // viewer-side rendering hints — this one changes what the server
+    // actually computes, so it's pushed into each SessionModelView.
+    void setMeshMode(bool enabled);
+    bool meshMode() const { return meshMode_; }
 
     // UDP socket fd — exposed so SessionViewController::KcpConsumer can use it.
     int udpFd() const { return udpFd_; }
@@ -126,6 +135,7 @@ private:
     int voxelRes_;
     float pointSize_ = 0.02f;
     BoundBox bounds_;
+    bool meshMode_ = false;
     int wsPort_  = 8080;
     int udpFd_   = -1;
     std::chrono::steady_clock::time_point startTime_{std::chrono::steady_clock::now()};
